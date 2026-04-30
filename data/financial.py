@@ -1,87 +1,70 @@
-"""DART(금융감독원 전자공시) API로 재무제표 데이터 수집"""
-import requests
-from config import DART_API_KEY, DART_BASE_URL
+"""KIS API 기반 재무제표 수집 (DART 불필요)
+
+한국투자증권 API에 재무 엔드포인트가 내장되어 있어
+별도의 DART API 키 없이 재무제표 조회가 가능합니다.
+"""
+from broker.kis import KISBroker
+
+_broker: KISBroker | None = None
 
 
-def _get_corp_code(ticker: str) -> str | None:
-    """종목코드 → DART 고유번호 변환"""
-    url = f"{DART_BASE_URL}/company.json"
-    res = requests.get(url, params={"crtfc_key": DART_API_KEY, "stock_code": ticker}, timeout=10)
-    res.raise_for_status()
-    data = res.json()
-    if data.get("status") == "000":
-        return data.get("corp_code")
-    return None
+def _get_broker() -> KISBroker:
+    global _broker
+    if _broker is None:
+        _broker = KISBroker()
+    return _broker
 
 
-def get_financial_summary(ticker: str, year: str = None) -> dict:
+def get_financial_summary(ticker: str, annual: bool = True) -> dict:
     """
-    최근 연간 재무 요약 반환.
-    year: "2023" 형식, None이면 가장 최근 사업연도 자동 탐색
+    손익계산서 + 대차대조표 + 재무비율을 통합하여 반환.
+    가장 최근 기간 기준으로 핵심 지표만 추출합니다.
     """
-    from datetime import datetime
-    if year is None:
-        year = str(datetime.now().year - 1)  # 전년도
+    broker = _get_broker()
 
-    corp_code = _get_corp_code(ticker)
-    if not corp_code:
-        return {"error": f"DART에서 {ticker} 종목을 찾을 수 없습니다."}
+    try:
+        income = broker.get_income_statement(ticker, annual=annual)
+        balance = broker.get_balance_sheet(ticker, annual=annual)
+        ratio = broker.get_financial_ratio(ticker, annual=annual)
+    except Exception as e:
+        return {"error": f"재무제표 조회 실패: {e}"}
 
-    url = f"{DART_BASE_URL}/fnlttSinglAcntAll.json"
-    params = {
-        "crtfc_key": DART_API_KEY,
-        "corp_code": corp_code,
-        "bsns_year": year,
-        "reprt_code": "11011",  # 사업보고서
-        "fs_div": "CFS",        # 연결재무제표 (없으면 OFS 개별 시도)
-    }
-    res = requests.get(url, params=params, timeout=15)
-    res.raise_for_status()
-    data = res.json()
+    if not income or not balance:
+        return {"error": f"{ticker} 재무데이터 없음"}
 
-    if data.get("status") != "000":
-        # 연결재무제표 없으면 개별재무제표 시도
-        params["fs_div"] = "OFS"
-        res = requests.get(url, params=params, timeout=15)
-        res.raise_for_status()
-        data = res.json()
+    latest_income = income[0]
+    latest_balance = balance[0]
+    latest_ratio = ratio[0] if ratio else {}
 
-    if data.get("status") != "000":
-        return {"error": f"재무제표 조회 실패: {data.get('message', '')}"}
-
-    items = data.get("list", [])
-
-    def find(account_name: str) -> float:
-        for item in items:
-            if account_name in item.get("account_nm", ""):
-                val = item.get("thstrm_amount", "0").replace(",", "").replace("-", "0")
-                try:
-                    return float(val)
-                except ValueError:
-                    return 0.0
-        return 0.0
-
-    revenue = find("매출액")
-    operating_profit = find("영업이익")
-    net_profit = find("당기순이익")
-    total_assets = find("자산총계")
-    total_equity = find("자본총계")
-    total_debt = find("부채총계")
-
-    roe = (net_profit / total_equity * 100) if total_equity else 0
-    debt_ratio = (total_debt / total_equity * 100) if total_equity else 0
-    operating_margin = (operating_profit / revenue * 100) if revenue else 0
+    # 전년 대비 매출 성장률
+    yoy_revenue_growth = None
+    if len(income) >= 2 and income[1]["revenue"]:
+        prev = income[1]["revenue"]
+        curr = latest_income["revenue"]
+        yoy_revenue_growth = round((curr - prev) / prev * 100, 2) if prev else None
 
     return {
         "ticker": ticker,
-        "year": year,
-        "revenue": revenue,
-        "operating_profit": operating_profit,
-        "net_profit": net_profit,
-        "total_assets": total_assets,
-        "total_equity": total_equity,
-        "total_debt": total_debt,
-        "roe_pct": round(roe, 2),
-        "debt_ratio_pct": round(debt_ratio, 2),
-        "operating_margin_pct": round(operating_margin, 2),
+        "period": latest_income["period"],
+        # 손익계산서
+        "revenue": latest_income["revenue"],
+        "operating_profit": latest_income["operating_profit"],
+        "net_profit": latest_income["net_profit"],
+        "eps": latest_income["eps"],
+        # 대차대조표
+        "total_assets": latest_balance["total_assets"],
+        "total_equity": latest_balance["total_equity"],
+        "total_debt": latest_balance["total_debt"],
+        "debt_ratio_pct": latest_balance["debt_ratio_pct"],
+        # 재무비율
+        "roe_pct": latest_ratio.get("roe_pct", 0),
+        "operating_margin_pct": latest_ratio.get("operating_margin_pct", 0),
+        "net_margin_pct": latest_ratio.get("net_margin_pct", 0),
+        "per": latest_ratio.get("per", 0),
+        "pbr": latest_ratio.get("pbr", 0),
+        # 성장성
+        "yoy_revenue_growth_pct": yoy_revenue_growth,
+        # 원시 데이터 (Claude가 추가 분석 가능하도록)
+        "income_history": income[:3],
+        "balance_history": balance[:3],
     }

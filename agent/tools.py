@@ -25,14 +25,19 @@ TOOLS = [
     {
         "name": "get_financial_statements",
         "description": (
-            "DART 공시 기반 연간 재무제표 요약을 가져옵니다. "
-            "매출액, 영업이익, 당기순이익, ROE, 부채비율, 영업이익률을 포함합니다."
+            "KIS API 기반 재무제표 요약을 가져옵니다 (DART 불필요). "
+            "매출액, 영업이익, 당기순이익, ROE, 부채비율, 영업이익률, PER, PBR, "
+            "전년 대비 매출 성장률, 최근 3개년 추이를 포함합니다."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "ticker": {"type": "string", "description": "6자리 종목코드"},
-                "year": {"type": "string", "description": "사업연도 (예: 2023). 생략 시 전년도"},
+                "annual": {
+                    "type": "boolean",
+                    "description": "true=연간(기본), false=분기",
+                    "default": True,
+                },
             },
             "required": ["ticker"],
         },
@@ -87,7 +92,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
         elif tool_name == "get_financial_statements":
             result = get_financial_summary(
                 tool_input["ticker"],
-                tool_input.get("year"),
+                annual=tool_input.get("annual", True),
             )
 
         elif tool_name == "get_portfolio":

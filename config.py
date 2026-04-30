@@ -18,10 +18,6 @@ KIS_BASE_URL = (
     "https://openapi.koreainvestment.com:9443"       # 실투자
 )
 
-# DART
-DART_API_KEY = os.getenv("DART_API_KEY", "")
-DART_BASE_URL = "https://opendart.fss.or.kr/api"
-
 # 트레이딩 설정
 MAX_BUY_AMOUNT = int(os.getenv("MAX_BUY_AMOUNT", "500000"))
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
