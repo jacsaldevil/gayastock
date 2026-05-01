@@ -21,7 +21,7 @@ st.set_page_config(
 # ── 사이드바 ──────────────────────────────────────────────
 st.sidebar.title("📈 gayastock")
 st.sidebar.caption("AI 주식 트레이딩 에이전트")
-page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그"])
+page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "예수금 입출금", "에이전트 로그"])
 refresh = st.sidebar.button("🔄 새로고침")
 
 @st.cache_data(ttl=30)
@@ -208,6 +208,74 @@ elif page == "매매 이력":
             display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")
             display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
             st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+# ══════════════════════════════════════════════════════════
+elif page == "예수금 입출금":
+    st.title("예수금 입출금 내역")
+
+    col_date1, col_date2, col_btn = st.columns([2, 2, 1])
+    with col_date1:
+        dep_start = st.date_input("시작일", value=datetime.now().date() - timedelta(days=30), key="dep_start")
+    with col_date2:
+        dep_end = st.date_input("종료일", value=datetime.now().date(), key="dep_end")
+    with col_btn:
+        st.write("")
+        dep_btn = st.button("조회", use_container_width=True, key="dep_btn")
+
+    @st.cache_data(ttl=60)
+    def load_deposit_history(start: str, end: str):
+        try:
+            broker = KISBroker()
+            return broker.get_deposit_history(start, end)
+        except Exception as e:
+            return {"error": str(e)}
+
+    if dep_btn or "dep_history" not in st.session_state:
+        st.session_state["dep_history"] = load_deposit_history(
+            dep_start.strftime("%Y%m%d"), dep_end.strftime("%Y%m%d")
+        )
+
+    dep_data = st.session_state.get("dep_history", [])
+
+    if isinstance(dep_data, dict) and "error" in dep_data:
+        st.error("예수금 입출금 내역 조회에 실패했습니다. API 설정을 확인하세요.")
+        st.stop()
+
+    if not dep_data:
+        st.info("해당 기간에 입출금 내역이 없습니다.")
+        st.stop()
+
+    ddf = pd.DataFrame(dep_data)
+    ddf["date"] = pd.to_datetime(ddf["date"], format="%Y%m%d", errors="coerce")
+
+    total_in = ddf[ddf["type"] == "입금"]["amount"].sum()
+    total_out = ddf[ddf["type"] == "출금"]["amount"].sum()
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("총 입금", f"₩{total_in:,.0f}")
+    col2.metric("총 출금", f"₩{total_out:,.0f}")
+    col3.metric("순 입출금", f"₩{total_in - total_out:,.0f}")
+
+    st.divider()
+
+    disp = ddf[["date", "type", "amount", "description", "balance"]].copy()
+    disp.columns = ["날짜", "구분", "금액", "거래내용", "잔액"]
+    disp["날짜"] = disp["날짜"].dt.strftime("%Y-%m-%d")
+    disp["금액"] = disp["금액"].apply(lambda x: f"₩{x:,.0f}")
+    disp["잔액"] = disp["잔액"].apply(lambda x: f"₩{x:,.0f}" if x else "-")
+    disp["구분"] = disp["구분"].apply(lambda x: "🔵 입금" if x == "입금" else "🟠 출금")
+    st.dataframe(disp, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    st.subheader("일별 입출금 추이")
+    ddf["date_only"] = ddf["date"].dt.date
+    daily_dep = ddf.groupby(["date_only", "type"])["amount"].sum().reset_index()
+    fig = px.bar(daily_dep, x="date_only", y="amount", color="type",
+                 color_discrete_map={"입금": "#3498db", "출금": "#e67e22"},
+                 labels={"date_only": "날짜", "amount": "금액 (원)", "type": "구분"})
+    fig.update_layout(height=300, margin=dict(t=20, b=20, l=20, r=20))
+    st.plotly_chart(fig, use_container_width=True)
 
 # ══════════════════════════════════════════════════════════
 elif page == "에이전트 로그":

@@ -281,6 +281,44 @@ class KISBroker:
             "message": data.get("msg1", ""),
         }
 
+    # ── 예수금 입출금 내역 ────────────────────────────────
+
+    def get_deposit_history(self, start_date: str, end_date: str) -> list[dict]:
+        """예수금 입출금 거래내역 조회 (TTTC0086R 실전 / VTTC0086R 모의)
+        start_date / end_date: 'YYYYMMDD' 형식
+        """
+        tr_id = "VTTC0086R" if KIS_MOCK else "TTTC0086R"
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-deposit-transaction"
+        params = {
+            "CANO": self.acc_no,
+            "ACNT_PRDT_CD": self.acc_suffix,
+            "INQR_STRT_DT": start_date,
+            "INQR_END_DT": end_date,
+            "DVSN": "00",           # 00=전체, 01=입금, 02=출금
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        self._smart_sleep()
+
+        result = []
+        for item in data.get("output1", []):
+            amt = _to_int(item.get("trad_amt") or item.get("dn_drwr_amt"))
+            if amt == 0:
+                continue
+            dvsn_raw = item.get("dvsn_name") or item.get("cncl_dvsn_name") or ""
+            is_deposit = _to_int(item.get("dn_drwr_amt", 0)) > 0
+            result.append({
+                "date": item.get("trad_dt") or item.get("prcs_dt", ""),
+                "type": "입금" if is_deposit else "출금",
+                "amount": amt,
+                "description": dvsn_raw,
+                "balance": _to_int(item.get("rmnd_amt") or item.get("blnc")),
+            })
+        return result
+
     # ── 체결 이력 ─────────────────────────────────────────
 
     def get_order_history(self, start_date: str, end_date: str) -> list[dict]:
