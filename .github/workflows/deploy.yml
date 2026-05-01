@@ -8,6 +8,8 @@ on:
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   REGION: asia-northeast3
+  REGISTRY: asia-northeast3-docker.pkg.dev
+  AR_REPO: gayastock
   DASHBOARD_SERVICE: gayastock-dashboard
   AGENT_JOB: gayastock-agent
   SECRETS_FLAGS: "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
@@ -34,19 +36,21 @@ jobs:
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for GCR
-        run: gcloud auth configure-docker --quiet
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker $REGISTRY --quiet
 
       - name: Build & Push Dashboard
         run: |
-          docker build -t gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:$GITHUB_SHA -t gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:latest .
-          docker push gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:$GITHUB_SHA
-          docker push gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:latest
+          IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$DASHBOARD_SERVICE
+          docker build -t $IMAGE:$GITHUB_SHA -t $IMAGE:latest .
+          docker push $IMAGE:$GITHUB_SHA
+          docker push $IMAGE:latest
 
       - name: Deploy Dashboard to Cloud Run
         run: |
+          IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$DASHBOARD_SERVICE
           gcloud run deploy $DASHBOARD_SERVICE \
-            --image gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:$GITHUB_SHA \
+            --image $IMAGE:$GITHUB_SHA \
             --platform managed \
             --region $REGION \
             --allow-unauthenticated \
@@ -59,14 +63,16 @@ jobs:
 
       - name: Build & Push Agent
         run: |
-          docker build -f Dockerfile.agent -t gcr.io/$PROJECT_ID/$AGENT_JOB:$GITHUB_SHA -t gcr.io/$PROJECT_ID/$AGENT_JOB:latest .
-          docker push gcr.io/$PROJECT_ID/$AGENT_JOB:$GITHUB_SHA
-          docker push gcr.io/$PROJECT_ID/$AGENT_JOB:latest
+          IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$AGENT_JOB
+          docker build -f Dockerfile.agent -t $IMAGE:$GITHUB_SHA -t $IMAGE:latest .
+          docker push $IMAGE:$GITHUB_SHA
+          docker push $IMAGE:latest
 
       - name: Update Cloud Run Job (Agent)
         run: |
+          IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$AGENT_JOB
           gcloud run jobs update $AGENT_JOB \
-            --image gcr.io/$PROJECT_ID/$AGENT_JOB:$GITHUB_SHA \
+            --image $IMAGE:$GITHUB_SHA \
             --region $REGION \
             --memory 512Mi \
             --cpu 1 \
