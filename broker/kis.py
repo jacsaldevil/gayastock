@@ -17,7 +17,12 @@ class KISBroker:
         self.base_url = KIS_BASE_URL
         self.app_key = KIS_APP_KEY
         self.app_secret = KIS_APP_SECRET
-        self.account_no = KIS_ACCOUNT_NO  # "01234567-01" 형식
+        raw = KIS_ACCOUNT_NO.strip()
+        # "50123456-01" 또는 "5012345601" 두 형식 모두 허용
+        if "-" in raw:
+            self.acc_no, self.acc_suffix = raw.split("-", 1)
+        else:
+            self.acc_no, self.acc_suffix = raw[:8], raw[8:]
         self._access_token: str | None = None
         self._token_expires_at: datetime | None = None
         self._load_cached_token()
@@ -187,10 +192,9 @@ class KISBroker:
         """잔고 및 보유 종목 조회 (VTTC8434R 모의 / TTTC8434R 실투자)"""
         tr_id = "VTTC8434R" if KIS_MOCK else "TTTC8434R"
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
-        acc_no, acc_suffix = self.account_no.split("-")
         params = {
-            "CANO": acc_no,
-            "ACNT_PRDT_CD": acc_suffix,
+            "CANO": self.acc_no,
+            "ACNT_PRDT_CD": self.acc_suffix,
             "AFHR_FLPR_YN": "N",
             "OFL_YN": "",
             "INQR_DVSN": "02",
@@ -233,10 +237,9 @@ class KISBroker:
         """매수 주문 (price=0 이면 시장가)"""
         tr_id = "VTTC0802U" if KIS_MOCK else "TTTC0802U"
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-cash"
-        acc_no, acc_suffix = self.account_no.split("-")
         body = {
-            "CANO": acc_no,
-            "ACNT_PRDT_CD": acc_suffix,
+            "CANO": self.acc_no,
+            "ACNT_PRDT_CD": self.acc_suffix,
             "PDNO": ticker,
             "ORD_DVSN": "01" if price == 0 else "00",  # 01=시장가, 00=지정가
             "ORD_QTY": str(quantity),
@@ -256,10 +259,9 @@ class KISBroker:
         """매도 주문 (price=0 이면 시장가)"""
         tr_id = "VTTC0801U" if KIS_MOCK else "TTTC0801U"
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-cash"
-        acc_no, acc_suffix = self.account_no.split("-")
         body = {
-            "CANO": acc_no,
-            "ACNT_PRDT_CD": acc_suffix,
+            "CANO": self.acc_no,
+            "ACNT_PRDT_CD": self.acc_suffix,
             "PDNO": ticker,
             "ORD_DVSN": "01" if price == 0 else "00",
             "ORD_QTY": str(quantity),
