@@ -4,7 +4,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -123,44 +123,91 @@ if page == "포트폴리오":
 elif page == "매매 이력":
     st.title("매매 이력")
 
-    trades = get_trades()
-    if not trades:
-        st.info("아직 매매 이력이 없습니다. 에이전트를 실행하면 여기에 기록됩니다.")
-        st.stop()
+    tab_kis, tab_agent = st.tabs(["📋 KIS 계좌 체결 이력", "🤖 에이전트 주문 로그"])
 
-    df = pd.DataFrame(trades)
-    df["ts"] = pd.to_datetime(df["ts"])
-    df = df.sort_values("ts", ascending=False)
+    # ── KIS 실계좌 체결 이력 ──────────────────────────────
+    with tab_kis:
+        col_date1, col_date2, col_btn = st.columns([2, 2, 1])
+        with col_date1:
+            start_d = st.date_input("시작일", value=datetime.now().date() - timedelta(days=30))
+        with col_date2:
+            end_d = st.date_input("종료일", value=datetime.now().date())
+        with col_btn:
+            st.write("")
+            fetch_btn = st.button("조회", use_container_width=True)
 
-    # 상단 요약
-    col1, col2, col3 = st.columns(3)
-    col1.metric("총 매매 횟수", len(df))
-    col2.metric("매수", len(df[df["action"] == "BUY"]))
-    col3.metric("매도", len(df[df["action"] == "SELL"]))
+        @st.cache_data(ttl=60)
+        def load_order_history(start: str, end: str):
+            try:
+                broker = KISBroker()
+                return broker.get_order_history(start, end)
+            except Exception as e:
+                return {"error": str(e)}
 
-    st.divider()
+        if fetch_btn or "kis_history" not in st.session_state:
+            st.session_state["kis_history"] = load_order_history(
+                start_d.strftime("%Y%m%d"), end_d.strftime("%Y%m%d")
+            )
 
-    # 매매 이력 테이블
-    display_df = df[["ts", "action", "ticker", "quantity", "price", "amount", "success", "reason"]].copy()
-    display_df.columns = ["일시", "구분", "종목코드", "수량", "체결가", "금액", "성공", "판단 근거"]
-    display_df["일시"] = display_df["일시"].dt.strftime("%Y-%m-%d %H:%M")
-    display_df["체결가"] = display_df["체결가"].apply(lambda x: f"₩{x:,.0f}")
-    display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")
-    display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
+        history = st.session_state.get("kis_history", [])
 
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+        if isinstance(history, dict) and "error" in history:
+            st.error("KIS 체결 이력 조회에 실패했습니다. API 설정을 확인하세요.")
+        elif not history:
+            st.info("해당 기간에 체결된 주문이 없습니다.")
+        else:
+            hdf = pd.DataFrame(history)
+            hdf["ts"] = pd.to_datetime(hdf["ts"], format="%Y%m%d %H%M%S", errors="coerce")
 
-    st.divider()
+            col1, col2, col3 = st.columns(3)
+            col1.metric("총 체결", len(hdf))
+            col2.metric("매수", len(hdf[hdf["action"] == "BUY"]))
+            col3.metric("매도", len(hdf[hdf["action"] == "SELL"]))
 
-    # 일별 매매 금액 차트
-    st.subheader("일별 매매 금액")
-    df["date"] = df["ts"].dt.date
-    daily = df.groupby(["date", "action"])["amount"].sum().reset_index()
-    fig = px.bar(daily, x="date", y="amount", color="action",
-                 color_discrete_map={"BUY": "#2ecc71", "SELL": "#e74c3c"},
-                 labels={"date": "날짜", "amount": "금액 (원)", "action": "구분"})
-    fig.update_layout(height=300, margin=dict(t=20, b=20, l=20, r=20))
-    st.plotly_chart(fig, use_container_width=True)
+            st.divider()
+
+            disp = hdf[["ts", "action", "ticker", "name", "quantity", "price", "amount"]].copy()
+            disp.columns = ["일시", "구분", "종목코드", "종목명", "수량", "체결가", "금액"]
+            disp["일시"] = disp["일시"].dt.strftime("%Y-%m-%d %H:%M:%S")
+            disp["체결가"] = disp["체결가"].apply(lambda x: f"₩{x:,.0f}")
+            disp["금액"] = disp["금액"].apply(lambda x: f"₩{x:,.0f}")
+            disp["구분"] = disp["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
+            st.dataframe(disp, use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.subheader("일별 매매 금액")
+            hdf["date"] = hdf["ts"].dt.date
+            daily = hdf.groupby(["date", "action"])["amount"].sum().reset_index()
+            fig = px.bar(daily, x="date", y="amount", color="action",
+                         color_discrete_map={"BUY": "#2ecc71", "SELL": "#e74c3c"},
+                         labels={"date": "날짜", "amount": "금액 (원)", "action": "구분"})
+            fig.update_layout(height=300, margin=dict(t=20, b=20, l=20, r=20))
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ── 에이전트 주문 로그 ────────────────────────────────
+    with tab_agent:
+        trades = get_trades()
+        if not trades:
+            st.info("아직 에이전트 주문 기록이 없습니다. 에이전트를 실행하면 여기에 기록됩니다.")
+        else:
+            df = pd.DataFrame(trades)
+            df["ts"] = pd.to_datetime(df["ts"])
+            df = df.sort_values("ts", ascending=False)
+
+            col1, col2, col3 = st.columns(3)
+            col1.metric("총 주문", len(df))
+            col2.metric("매수", len(df[df["action"] == "BUY"]))
+            col3.metric("매도", len(df[df["action"] == "SELL"]))
+
+            st.divider()
+
+            display_df = df[["ts", "action", "ticker", "quantity", "price", "amount", "success", "reason"]].copy()
+            display_df.columns = ["일시", "구분", "종목코드", "수량", "체결가", "금액", "성공", "판단 근거"]
+            display_df["일시"] = display_df["일시"].dt.strftime("%Y-%m-%d %H:%M")
+            display_df["체결가"] = display_df["체결가"].apply(lambda x: f"₩{x:,.0f}")
+            display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")
+            display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════════════════
 elif page == "에이전트 로그":

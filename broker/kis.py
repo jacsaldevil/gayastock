@@ -281,6 +281,55 @@ class KISBroker:
             "message": data.get("msg1", ""),
         }
 
+    # ── 체결 이력 ─────────────────────────────────────────
+
+    def get_order_history(self, start_date: str, end_date: str) -> list[dict]:
+        """일별 주문체결 조회 (TTTC8001R 실전 / VTTC8001R 모의)
+        start_date / end_date: 'YYYYMMDD' 형식
+        """
+        tr_id = "VTTC8001R" if KIS_MOCK else "TTTC8001R"
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        params = {
+            "CANO": self.acc_no,
+            "ACNT_PRDT_CD": self.acc_suffix,
+            "INQR_STRT_DT": start_date,
+            "INQR_END_DT": end_date,
+            "SLL_BUY_DVSN_CD": "00",   # 00=전체
+            "INQR_DVSN": "00",          # 00=역순(최신순)
+            "PDNO": "",
+            "CCLD_DVSN": "01",          # 01=체결만
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        self._smart_sleep()
+
+        result = []
+        for item in data.get("output1", []):
+            qty = _to_int(item.get("tot_ccld_qty"))
+            if qty == 0:
+                continue
+            action = "SELL" if item.get("sll_buy_dvsn_cd") == "01" else "BUY"
+            price = _to_int(item.get("avg_prvs"))
+            result.append({
+                "ts": item.get("ord_dt", "") + " " + item.get("ord_tmd", ""),
+                "action": action,
+                "ticker": item.get("pdno", ""),
+                "name": item.get("prdt_name", ""),
+                "quantity": qty,
+                "price": price,
+                "amount": price * qty,
+                "order_no": item.get("odno", ""),
+                "order_state": item.get("ord_psbl_yn", ""),
+            })
+        return result
+
 
 def _to_int(val) -> int:
     try:
