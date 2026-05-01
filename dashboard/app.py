@@ -211,73 +211,53 @@ elif page == "매매 이력":
 
 # ══════════════════════════════════════════════════════════
 elif page == "예수금 입출금":
-    st.title("예수금 입출금 내역")
-
-    col_date1, col_date2, col_btn = st.columns([2, 2, 1])
-    with col_date1:
-        dep_start = st.date_input("시작일", value=datetime.now().date() - timedelta(days=30), key="dep_start")
-    with col_date2:
-        dep_end = st.date_input("종료일", value=datetime.now().date(), key="dep_end")
-    with col_btn:
-        st.write("")
-        dep_btn = st.button("조회", use_container_width=True, key="dep_btn")
+    st.title("예수금 현황")
+    st.caption("※ KIS Open API는 입출금 내역 조회를 지원하지 않습니다. 현재 예수금 구성을 표시합니다.")
 
     @st.cache_data(ttl=60)
-    def load_deposit_history(start: str, end: str):
+    def load_deposit_detail():
         try:
             broker = KISBroker()
-            return broker.get_deposit_history(start, end)
+            return broker.get_deposit_detail()
         except Exception as e:
             return {"error": str(e)}
 
-    if dep_btn or "dep_history" not in st.session_state:
-        st.session_state["dep_history"] = load_deposit_history(
-            dep_start.strftime("%Y%m%d"), dep_end.strftime("%Y%m%d")
-        )
+    dep = load_deposit_detail()
 
-    dep_data = st.session_state.get("dep_history", [])
-
-    if isinstance(dep_data, dict) and "error" in dep_data:
-        st.error("예수금 입출금 내역 조회에 실패했습니다.")
-        with st.expander("오류 상세 (디버그)"):
-            st.code(dep_data["error"])
+    if "error" in dep:
+        st.error("예수금 현황 조회에 실패했습니다. API 설정을 확인하세요.")
+        with st.expander("오류 상세"):
+            st.code(dep["error"])
         st.stop()
 
-    if not dep_data:
-        st.info("해당 기간에 입출금 내역이 없습니다.")
-        st.stop()
-
-    ddf = pd.DataFrame(dep_data)
-    ddf["date"] = pd.to_datetime(ddf["date"], format="%Y%m%d", errors="coerce")
-
-    total_in = ddf[ddf["type"] == "입금"]["amount"].sum()
-    total_out = ddf[ddf["type"] == "출금"]["amount"].sum()
-
-    col1, col2, col3 = st.columns(3)
-    col1.metric("총 입금", f"₩{total_in:,.0f}")
-    col2.metric("총 출금", f"₩{total_out:,.0f}")
-    col3.metric("순 입출금", f"₩{total_in - total_out:,.0f}")
+    # 상단 요약
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("예수금 총액", f"₩{dep['deposit_total']:,.0f}")
+    col2.metric("순자산", f"₩{dep['net_asset']:,.0f}")
+    col3.metric("총 평가금액", f"₩{dep['total_eval']:,.0f}")
+    delta_color = "normal" if dep["asset_change"] >= 0 else "inverse"
+    col4.metric("전일 대비 자산 증감", f"₩{dep['asset_change']:,.0f}",
+                f"{dep['asset_change_rate']:+.2f}%", delta_color=delta_color)
 
     st.divider()
 
-    disp = ddf[["date", "type", "amount", "description", "balance"]].copy()
-    disp.columns = ["날짜", "구분", "금액", "거래내용", "잔액"]
-    disp["날짜"] = disp["날짜"].dt.strftime("%Y-%m-%d")
-    disp["금액"] = disp["금액"].apply(lambda x: f"₩{x:,.0f}")
-    disp["잔액"] = disp["잔액"].apply(lambda x: f"₩{x:,.0f}" if x else "-")
-    disp["구분"] = disp["구분"].apply(lambda x: "🔵 입금" if x == "입금" else "🟠 출금")
-    st.dataframe(disp, use_container_width=True, hide_index=True)
+    # 당일 매매 현황
+    st.subheader("당일 매매 현황")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("금일 매수금액", f"₩{dep['today_buy']:,.0f}")
+        st.metric("전일 매수금액", f"₩{dep['yesterday_buy']:,.0f}")
+    with col2:
+        st.metric("금일 매도금액", f"₩{dep['today_sell']:,.0f}")
+        st.metric("전일 매도금액", f"₩{dep['yesterday_sell']:,.0f}")
 
     st.divider()
 
-    st.subheader("일별 입출금 추이")
-    ddf["date_only"] = ddf["date"].dt.date
-    daily_dep = ddf.groupby(["date_only", "type"])["amount"].sum().reset_index()
-    fig = px.bar(daily_dep, x="date_only", y="amount", color="type",
-                 color_discrete_map={"입금": "#3498db", "출금": "#e67e22"},
-                 labels={"date_only": "날짜", "amount": "금액 (원)", "type": "구분"})
-    fig.update_layout(height=300, margin=dict(t=20, b=20, l=20, r=20))
-    st.plotly_chart(fig, use_container_width=True)
+    # 정산 예정
+    st.subheader("정산 예정")
+    col1, col2 = st.columns(2)
+    col1.metric("D+2 출금 가능 예정액", f"₩{dep['d2_receivable']:,.0f}")
+    col2.metric("총 대출금액", f"₩{dep['total_loan']:,.0f}")
 
 # ══════════════════════════════════════════════════════════
 elif page == "에이전트 로그":
