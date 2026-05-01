@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 import google.generativeai as genai
-from agent.tools import GEMINI_TOOLS, execute_tool, broker
+from agent.tools import GEMINI_TOOLS, execute_tool, _broker
 from data.trade_log import log_agent_run
 from config import GOOGLE_API_KEY, GEMINI_MODEL, MAX_POSITIONS
 
@@ -88,7 +88,7 @@ class TradingAgent:
         logger.info("에이전트 완료")
 
         try:
-            portfolio_snapshot = broker.get_balance()
+            portfolio_snapshot = _broker().get_balance()
         except Exception:
             portfolio_snapshot = {}
         log_agent_run(watchlist, final, portfolio_snapshot)
