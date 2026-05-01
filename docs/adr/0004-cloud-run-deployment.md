@@ -1,52 +1,69 @@
-# ADR-004: Google Cloud Run 배포
+# ADR-004: Google Cloud Run 배포 + GitHub Actions CI/CD
 
-- **상태**: Accepted
+- **상태**: Accepted (Updated 2026-05-01)
 - **날짜**: 2026-05-01
 
 ## 배경
 
-대시보드를 로컬이 아닌 외부에서 접근 가능한 URL로 서빙해야 했다. 개발 환경 자체는 공개 IP가 없어 클라우드 배포가 필요했다.
+대시보드와 에이전트를 GCP에서 실행해야 하며, 코드 변경 시 자동으로 배포되는 파이프라인이 필요하다.
 
 ## 결정
 
-**대시보드(Streamlit)를 Google Cloud Run에 배포한다.**
+**대시보드는 Cloud Run, 에이전트는 Cloud Run Jobs로 배포하고, CI/CD는 GitHub Actions로 자동화한다.**
 
-아키텍처:
 ```
-로컬 PC
-└── python main.py   ← 에이전트 실행 (KIS API 직접 호출)
+main 브랜치 push
+  └── GitHub Actions
+        ├── Docker 빌드 (대시보드 / 에이전트 분리)
+        ├── GCR 푸시
+        ├── Cloud Run 배포 (대시보드)
+        └── Cloud Run Jobs 업데이트 (에이전트)
 
-Google Cloud Run
-└── dashboard/app.py ← 대시보드 (KIS API 잔고 조회 + 로그 파일 읽기)
+Cloud Scheduler (평일 09:10 / 14:00 KST)
+  └── Cloud Run Jobs 실행 (에이전트 1회 실행 후 종료)
 ```
 
-인증/비밀 관리는 Cloud Secret Manager를 사용하고, `.env` 파일은 컨테이너에 포함하지 않는다.
+## 컨테이너 분리
+
+| 파일 | 대상 | 진입점 |
+|------|------|--------|
+| `Dockerfile` | Cloud Run (대시보드) | `streamlit run dashboard/app.py` |
+| `Dockerfile.agent` | Cloud Run Jobs (에이전트) | `python main.py --once` |
+
+## CI/CD 구성 (GitHub Actions)
+
+**필요한 GitHub Secrets:**
+
+| Secret | 설명 |
+|--------|------|
+| `GCP_PROJECT_ID` | GCP 프로젝트 ID |
+| `GCP_SA_KEY` | GitHub Actions용 서비스 계정 JSON 키 (base64) |
+
+앱 비밀(KIS 키, Gemini 키)은 GCP Secret Manager에 저장하고 컨테이너 실행 시 주입한다. 코드 저장소에는 포함하지 않는다.
 
 ## 검토한 대안
 
 | 방식 | 탈락 이유 |
 |------|-----------|
-| Streamlit Community Cloud | KIS API 키 보안 관리 어려움, 커스텀 도메인 제한 |
-| Cloud Compute Engine (VM) | 항상 켜져 있어 비용 발생, 관리 오버헤드 |
-| Railway / Render | GCP 생태계 외부, Secret Manager 미지원 |
-| Cloud Run | **채택**: 트래픽 없을 때 인스턴스 0으로 축소 → 비용 최소화 |
+| Cloud Build 트리거 | GitHub Actions로 통합 가능, 별도 도구 불필요 |
+| 수동 `deploy.sh` | 자동화 안 됨, 실수 여지 있음 |
+| GitHub Actions | **채택**: 코드 리뷰·배포 파이프라인 한 곳에서 관리 |
+
+## 초기 설정
+
+GCP 리소스(Cloud Run Job, Scheduler, Secret Manager, 서비스 계정)는 `scripts/gcp-setup.sh`로 최초 1회 생성한다. 이후 변경사항은 GitHub Actions가 자동 처리한다.
 
 ## 배포 구성
 
-| 항목 | 설정값 | 이유 |
-|------|--------|------|
-| 리전 | `asia-northeast3` (서울) | 레이턴시 최소화 |
-| 메모리 | 512Mi | Pandas/Plotly 로딩 여유분 |
-| min-instances | 0 | 비용 절감 (콜드스타트 감수) |
-| max-instances | 2 | 개인 대시보드 수준 트래픽 |
-| 인증 | `--allow-unauthenticated` | 개인 접근 용도, 필요 시 IAP로 교체 |
+| 항목 | 설정 | 이유 |
+|------|------|------|
+| 리전 | `asia-northeast3` | 서울, KIS API 레이턴시 최소화 |
+| 대시보드 메모리 | 512Mi | Pandas/Plotly 여유분 |
+| 에이전트 timeout | 600s | 재무 분석 + 주문 실행 여유 |
+| min-instances | 0 | 비용 절감 |
 
 ## 결과
 
-- **긍정적**: 요청 없을 때 비용 0에 수렴, Secret Manager로 키 안전 관리, 빌드 자동화(`deploy.sh`)
-- **부정적**: 콜드스타트 시 초기 응답 3~5초 지연 가능
-- **제약**: 에이전트(`main.py`)는 Cloud Run에서 실행하지 않음. 컨테이너 재시작 시 로컬 JSONL 로그가 사라지므로, 에이전트-대시보드 간 로그 공유는 현재 로컬 전용
-
-## 향후
-
-에이전트도 클라우드에서 스케줄 실행하려면 Cloud Scheduler + Cloud Run Jobs로 전환하고, 로그 저장소를 Cloud Storage 또는 Firestore로 이전한다.
+- **긍정적**: git push 하나로 배포 완결, Secret Manager로 키 안전 관리, Claude Code에서 gcloud 없이도 배포 가능
+- **부정적**: GitHub Actions 초기 설정 필요 (SA 키, Secrets 등록)
+- **제약**: Cloud Run Jobs는 최초 생성 시 `gcp-setup.sh` 실행 필요 (GitHub Actions는 update만 수행)
