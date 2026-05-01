@@ -58,33 +58,48 @@ class TradingAgent:
         )
 
         logger.info(f"트레이딩 에이전트 시작: {watchlist}")
-        chat = self.model.start_chat()
-        response = chat.send_message(user_message)
+        try:
+            chat = self.model.start_chat()
+            response = chat.send_message(user_message)
+        except Exception as e:
+            error_msg = f"Gemini API 초기 호출 실패: {e}"
+            logger.error(error_msg)
+            return error_msg
 
-        for _ in range(MAX_TOOL_ROUNDS):
-            fn_calls = [p for p in response.parts if hasattr(p, "function_call") and p.function_call.name]
+        for i in range(MAX_TOOL_ROUNDS):
+            try:
+                # 안전 필터링 등으로 인해 response.parts가 없을 수 있음
+                if not response.parts:
+                    logger.warning("Gemini 응답에 내용이 없습니다 (차단되었을 수 있음)")
+                    break
+                
+                fn_calls = [p for p in response.parts if hasattr(p, "function_call") and p.function_call.name]
 
-            if not fn_calls:
-                break
+                if not fn_calls:
+                    break
 
-            fn_responses = []
-            for part in fn_calls:
-                fn = part.function_call
-                logger.info(f"Tool: {fn.name} | {dict(fn.args)}")
-                result_str = execute_tool(fn.name, dict(fn.args))
-                logger.info(f"결과: {result_str[:200]}")
-                fn_responses.append(
-                    genai.protos.Part(
-                        function_response=genai.protos.FunctionResponse(
-                            name=fn.name,
-                            response={"result": result_str},
+                fn_responses = []
+                for part in fn_calls:
+                    fn = part.function_call
+                    logger.info(f"Tool: {fn.name} | {dict(fn.args)}")
+                    result_str = execute_tool(fn.name, dict(fn.args))
+                    logger.info(f"결과: {result_str[:200]}")
+                    fn_responses.append(
+                        genai.protos.Part(
+                            function_response=genai.protos.FunctionResponse(
+                                name=fn.name,
+                                response={"result": result_str},
+                            )
                         )
                     )
-                )
 
-            response = chat.send_message(fn_responses)
+                response = chat.send_message(fn_responses)
+            except Exception as e:
+                error_msg = f"에이전트 루프 중 오류 발생 ({i}라운드): {e}"
+                logger.error(error_msg)
+                return error_msg
 
-        final = response.text if hasattr(response, "text") and response.text else "분석 완료"
+        final = response.text if hasattr(response, "text") and response.text else "분석 완료 (텍스트 응답 없음)"
         logger.info("에이전트 완료")
 
         try:

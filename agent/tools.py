@@ -200,7 +200,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
 
-            if DRY_RUN:
+            if _is_dry_run():
                 result = {
                     "success": True,
                     "order_no": "DRY-RUN",
