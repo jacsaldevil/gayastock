@@ -6,16 +6,20 @@ gayastock - 재무제표 기반 국내 주식 트레이딩 에이전트
 """
 import argparse
 import logging
+import os
 import schedule
 import time
 from agent.trader import TradingAgent
+
+_log_dir = os.environ.get("LOG_DIR", "logs")
+os.makedirs(_log_dir, exist_ok=True)
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("logs/trading.log", encoding="utf-8"),
+        logging.FileHandler(os.path.join(_log_dir, "trading.log"), encoding="utf-8"),
     ],
 )
 logger = logging.getLogger(__name__)

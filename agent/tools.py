@@ -1,12 +1,22 @@
 """Gemini function calling 도구 정의 및 실행 핸들러"""
 import json
+import re
 import google.generativeai as genai
-from broker.kis import KISBroker
 from data.financial import get_financial_summary
 from data.trade_log import log_trade
 from config import MAX_BUY_AMOUNT
 
-broker = KISBroker()
+# KISBroker 싱글턴 — financial.py와 동일 인스턴스 공유
+from data.financial import _get_broker as _get_kis_broker
+
+def _broker():
+    return _get_kis_broker()
+
+
+def _validate_ticker(ticker: str):
+    if not re.fullmatch(r"\d{6}", str(ticker)):
+        raise ValueError(f"유효하지 않은 종목코드: {ticker!r} (6자리 숫자여야 합니다)")
+
 
 # Gemini FunctionDeclaration 형식
 GEMINI_TOOLS = genai.protos.Tool(
@@ -112,10 +122,14 @@ GEMINI_TOOLS = genai.protos.Tool(
 def execute_tool(tool_name: str, tool_input: dict) -> str:
     """Gemini가 호출한 function을 실행하고 결과를 JSON 문자열로 반환"""
     try:
+        broker = _broker()
+
         if tool_name == "get_stock_price":
+            _validate_ticker(tool_input["ticker"])
             result = broker.get_current_price(tool_input["ticker"])
 
         elif tool_name == "get_financial_statements":
+            _validate_ticker(tool_input["ticker"])
             result = get_financial_summary(
                 tool_input["ticker"],
                 annual=tool_input.get("annual", True),
@@ -126,8 +140,13 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
         elif tool_name == "buy_stock":
             ticker = tool_input["ticker"]
+            _validate_ticker(ticker)
             qty = int(tool_input["quantity"])
             reason = tool_input.get("reason", "")
+
+            if qty <= 0:
+                return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
+
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
             total_cost = current_price * qty
@@ -141,17 +160,35 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                 result = broker.buy_order(ticker, qty)
                 result["reason"] = reason
                 result["total_cost"] = total_cost
-                log_trade("BUY", ticker, qty, current_price, reason, result["success"])
+                if result["success"]:
+                    log_trade("BUY", ticker, qty, current_price, reason, True)
 
         elif tool_name == "sell_stock":
             ticker = tool_input["ticker"]
+            _validate_ticker(ticker)
             qty = int(tool_input["quantity"])
             reason = tool_input.get("reason", "")
+
+            if qty <= 0:
+                return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
+
+            # 보유 수량 사전 검증
+            balance = broker.get_balance()
+            holding = next((h for h in balance["holdings"] if h["ticker"] == ticker), None)
+            if not holding:
+                return json.dumps({"success": False, "message": f"{ticker} 미보유 종목입니다."}, ensure_ascii=False)
+            if qty > holding["quantity"]:
+                return json.dumps({
+                    "success": False,
+                    "message": f"매도 수량({qty}주)이 보유 수량({holding['quantity']}주)을 초과합니다.",
+                }, ensure_ascii=False)
+
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
             result = broker.sell_order(ticker, qty)
             result["reason"] = reason
-            log_trade("SELL", ticker, qty, current_price, reason, result["success"])
+            if result["success"]:
+                log_trade("SELL", ticker, qty, current_price, reason, True)
 
         else:
             result = {"error": f"알 수 없는 tool: {tool_name}"}

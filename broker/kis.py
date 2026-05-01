@@ -46,6 +46,7 @@ class KISBroker:
     def _save_token_cache(self, token: str, expires_at: datetime):
         with open(TOKEN_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump({"access_token": token, "expires_at": expires_at.isoformat()}, f)
+        os.chmod(TOKEN_CACHE_FILE, 0o600)  # 소유자만 읽기/쓰기
 
     def _get_token(self) -> str:
         if self._access_token and self._token_expires_at and datetime.now() < self._token_expires_at:
@@ -97,9 +98,12 @@ class KISBroker:
         res.raise_for_status()
         output = res.json().get("output", {})
         self._smart_sleep()
+        current_price = int(output.get("stck_prpr", 0) or 0)
+        if current_price == 0:
+            raise ValueError(f"{ticker} 현재가 조회 실패 (거래정지 또는 API 오류)")
         return {
             "ticker": ticker,
-            "current_price": int(output.get("stck_prpr", 0) or 0),
+            "current_price": current_price,
             "open_price": int(output.get("stck_oprc", 0) or 0),
             "high_price": int(output.get("stck_hgpr", 0) or 0),
             "low_price": int(output.get("stck_lwpr", 0) or 0),

@@ -42,8 +42,7 @@ if page == "포트폴리오":
     data = load_balance()
 
     if "error" in data:
-        st.error(f"KIS API 오류: {data['error']}")
-        st.info("`.env` 파일에 KIS API 키가 설정되어 있는지 확인하세요.")
+        st.error("잔고 조회에 실패했습니다. API 설정을 확인하세요.")
         st.stop()
 
     # 상단 요약 카드
