@@ -238,7 +238,9 @@ elif page == "예수금 입출금":
     dep_data = st.session_state.get("dep_history", [])
 
     if isinstance(dep_data, dict) and "error" in dep_data:
-        st.error("예수금 입출금 내역 조회에 실패했습니다. API 설정을 확인하세요.")
+        st.error("예수금 입출금 내역 조회에 실패했습니다.")
+        with st.expander("오류 상세 (디버그)"):
+            st.code(dep_data["error"])
         st.stop()
 
     if not dep_data:
