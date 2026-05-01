@@ -1,0 +1,86 @@
+---
+title: gayastock 전체 시스템 아키텍처
+---
+
+%%{init: {"theme": "base", "themeVariables": {"fontSize": "14px"}}}%%
+
+flowchart TB
+
+    %% ── 개발/운영 영역 ──────────────────────────────────────
+    subgraph DEV["👨‍💻 개발 · 운영  (Claude Code Pro)"]
+        direction LR
+        DEV_CODE["코드 작성 · 수정\n버그 픽스 · 리팩터링"]
+        DEV_DEPLOY["배포 명령\ngit push"]
+        DEV_OPS["서버 관리\n로그 확인 · 설정 변경"]
+        DEV_CODE --> DEV_DEPLOY
+    end
+
+    %% ── 외부 API ─────────────────────────────────────────────
+    subgraph EXT["🌐 외부 서비스"]
+        direction TB
+        GEMINI_API["Gemini API\n(Google AI Studio)\n무료 티어\ngemini-2.0-flash\n1,500 req/day 무료"]
+        KIS_API["KIS Open API\n한국투자증권\n모의투자 서버"]
+    end
+
+    %% ── Google Cloud Platform ────────────────────────────────
+    subgraph GCP["☁️ Google Cloud Platform"]
+        direction TB
+
+        subgraph CICD["🔧 CI/CD  (Cloud Build)"]
+            CB["코드 변경 감지\n→ Docker 빌드\n→ 자동 배포"]
+        end
+
+        subgraph TRIGGER["⏰ 스케줄러  (Cloud Scheduler)"]
+            CS["평일 09:10  매수 분석\n평일 14:00  포지션 점검"]
+        end
+
+        subgraph AGENT["🤖 트레이딩 에이전트  (Cloud Run Jobs)"]
+            direction TB
+            AG_FLOW["1. 포트폴리오 확인\n2. 관심종목 현재가 조회\n3. 재무제표 분석 요청\n4. Gemini 매수/매도 판단\n5. KIS 주문 실행\n6. 결과 로그 저장"]
+        end
+
+        subgraph STORAGE["🗄️ 데이터 저장소"]
+            direction LR
+            GCS["Cloud Storage\n─────────────\ntrades.jsonl\nagent_runs.jsonl"]
+            SM["Secret Manager\n─────────────\nGOOGLE_API_KEY\nKIS_APP_KEY\nKIS_APP_SECRET\nKIS_ACCOUNT_NO"]
+        end
+
+        subgraph DASHBOARD["📊 대시보드  (Cloud Run)"]
+            direction TB
+            DASH_UI["Streamlit\n─────────────────\n포트폴리오 현황\n보유종목 · 수익률\n매매 이력 차트\n에이전트 판단 로그"]
+        end
+
+    end
+
+    %% ── 사용자 ───────────────────────────────────────────────
+    USER["👤 사용자\n브라우저"]
+
+    %% ── 연결 ─────────────────────────────────────────────────
+    DEV_DEPLOY      -->|"git push → 빌드 트리거"| CB
+    CB              -->|"에이전트 이미지 배포"| AGENT
+    CB              -->|"대시보드 이미지 배포"| DASHBOARD
+
+    CS              -->|"장 시간 자동 실행"| AGENT
+
+    AG_FLOW         <-->|"Function Calling\n재무 분석 · 매매 판단"| GEMINI_API
+    AG_FLOW         <-->|"시세 · 재무 조회\n모의 매수/매도"| KIS_API
+    AG_FLOW         -->|"매매 이력 · 실행 요약 저장"| GCS
+    SM              -.->|"API 키 주입"| AGENT
+    SM              -.->|"API 키 주입"| DASHBOARD
+
+    GCS             -->|"로그 읽기"| DASH_UI
+    DASH_UI         <-->|"실시간 잔고 조회"| KIS_API
+
+    USER            -->|"HTTPS"| DASH_UI
+    DEV_OPS         -.->|"모니터링 · 설정"| GCP
+
+    %% ── 스타일 ───────────────────────────────────────────────
+    classDef gcpBox  fill:#e8f4f8,stroke:#4285f4,stroke-width:2px
+    classDef extBox  fill:#fef9e7,stroke:#f39c12,stroke-width:2px
+    classDef devBox  fill:#eafaf1,stroke:#27ae60,stroke-width:2px
+    classDef userBox fill:#f5eef8,stroke:#8e44ad,stroke-width:2px
+
+    class GCP gcpBox
+    class EXT extBox
+    class DEV devBox
+    class USER userBox

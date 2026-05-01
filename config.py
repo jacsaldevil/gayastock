@@ -3,8 +3,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Anthropic
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+# Google AI Studio
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 # KIS API
 KIS_APP_KEY = os.getenv("KIS_APP_KEY", "")
@@ -21,6 +22,3 @@ KIS_BASE_URL = (
 # 트레이딩 설정
 MAX_BUY_AMOUNT = int(os.getenv("MAX_BUY_AMOUNT", "500000"))
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
-
-# Claude 모델
-CLAUDE_MODEL = "claude-sonnet-4-6"
