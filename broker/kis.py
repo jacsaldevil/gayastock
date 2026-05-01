@@ -324,51 +324,6 @@ class KISBroker:
             "message": data.get("msg1", ""),
         }
 
-    # ── 예수금 입출금 내역 ────────────────────────────────
-
-    def get_deposit_detail(self) -> dict:
-        """예수금 상세현황 조회 (TTTC0084R 실전 / VTTC0084R 모의)
-        입출금 내역은 KIS Open API 미지원 — 대신 현재 예수금 구성 반환
-        """
-        tr_id = "VTTC0084R" if KIS_MOCK else "TTTC0084R"
-        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-deposit"
-        params = {
-            "CANO": self.acc_no,
-            "ACNT_PRDT_CD": self.acc_suffix,
-            "RVSE_CNCL_DVSN_CD": "",
-            "AFHR_FLPR_YN": "N",
-            "OFL_YN": "",
-            "INQR_DVSN": "01",
-            "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N",
-            "FNCG_AMT_AUTO_RDPT_YN": "N",
-            "PRCS_DVSN": "01",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
-        }
-        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
-        res.raise_for_status()
-        data = res.json()
-        self._smart_sleep()
-
-        if data.get("rt_cd") != "0":
-            raise ValueError(f"KIS API 오류 [{data.get('rt_cd')}]: {data.get('msg1', '')}")
-
-        o = data.get("output1", {})
-        return {
-            "deposit_total":    _to_int(o.get("dnca_tot_amt")),       # 예수금 총금액
-            "d2_receivable":    _to_int(o.get("nxdy_excc_amt")),      # D+2 정산 예정금액
-            "yesterday_buy":    _to_int(o.get("bfdy_buy_amt")),       # 전일 매수금액
-            "today_buy":        _to_int(o.get("thdt_buy_amt")),       # 금일 매수금액
-            "yesterday_sell":   _to_int(o.get("bfdy_sll_amt")),       # 전일 매도금액
-            "today_sell":       _to_int(o.get("thdt_sll_amt")),       # 금일 매도금액
-            "total_loan":       _to_int(o.get("tot_loan_amt")),       # 총 대출금액
-            "net_asset":        _to_int(o.get("nass_amt")),           # 순자산금액
-            "total_eval":       _to_int(o.get("tot_evlu_amt")),       # 총 평가금액
-            "asset_change":     _to_int(o.get("asst_icdc_amt")),      # 전일 대비 자산 증감
-            "asset_change_rate": _to_float(o.get("asst_icdc_erng_rt")),  # 자산 증감률
-        }
-
     # ── 체결 이력 ─────────────────────────────────────────
 
     def get_order_history(self, start_date: str, end_date: str) -> list[dict]:

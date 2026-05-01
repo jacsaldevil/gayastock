@@ -21,7 +21,7 @@ st.set_page_config(
 # ── 사이드바 ──────────────────────────────────────────────
 st.sidebar.title("📈 gayastock")
 st.sidebar.caption("AI 주식 트레이딩 에이전트")
-page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "예수금 입출금", "에이전트 로그"])
+page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그"])
 refresh = st.sidebar.button("🔄 새로고침")
 
 @st.cache_data(ttl=30)
@@ -208,56 +208,6 @@ elif page == "매매 이력":
             display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")
             display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
             st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-# ══════════════════════════════════════════════════════════
-elif page == "예수금 입출금":
-    st.title("예수금 현황")
-    st.caption("※ KIS Open API는 입출금 내역 조회를 지원하지 않습니다. 현재 예수금 구성을 표시합니다.")
-
-    @st.cache_data(ttl=60)
-    def load_deposit_detail():
-        try:
-            broker = KISBroker()
-            return broker.get_deposit_detail()
-        except Exception as e:
-            return {"error": str(e)}
-
-    dep = load_deposit_detail()
-
-    if "error" in dep:
-        st.error("예수금 현황 조회에 실패했습니다. API 설정을 확인하세요.")
-        with st.expander("오류 상세"):
-            st.code(dep["error"])
-        st.stop()
-
-    # 상단 요약
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("예수금 총액", f"₩{dep['deposit_total']:,.0f}")
-    col2.metric("순자산", f"₩{dep['net_asset']:,.0f}")
-    col3.metric("총 평가금액", f"₩{dep['total_eval']:,.0f}")
-    delta_color = "normal" if dep["asset_change"] >= 0 else "inverse"
-    col4.metric("전일 대비 자산 증감", f"₩{dep['asset_change']:,.0f}",
-                f"{dep['asset_change_rate']:+.2f}%", delta_color=delta_color)
-
-    st.divider()
-
-    # 당일 매매 현황
-    st.subheader("당일 매매 현황")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("금일 매수금액", f"₩{dep['today_buy']:,.0f}")
-        st.metric("전일 매수금액", f"₩{dep['yesterday_buy']:,.0f}")
-    with col2:
-        st.metric("금일 매도금액", f"₩{dep['today_sell']:,.0f}")
-        st.metric("전일 매도금액", f"₩{dep['yesterday_sell']:,.0f}")
-
-    st.divider()
-
-    # 정산 예정
-    st.subheader("정산 예정")
-    col1, col2 = st.columns(2)
-    col1.metric("D+2 출금 가능 예정액", f"₩{dep['d2_receivable']:,.0f}")
-    col2.metric("총 대출금액", f"₩{dep['total_loan']:,.0f}")
 
 # ══════════════════════════════════════════════════════════
 elif page == "에이전트 로그":
