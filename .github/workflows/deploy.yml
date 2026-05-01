@@ -72,15 +72,12 @@ jobs:
       - name: Update Cloud Run Job (Agent)
         run: |
           IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$AGENT_JOB
-          gcloud run jobs update $AGENT_JOB \
-            --image $IMAGE:$GITHUB_SHA \
-            --region $REGION \
-            --memory 512Mi \
-            --cpu 1 \
-            --task-timeout 600 \
-            --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com \
-            --set-env-vars "$ENV_FLAGS" \
-            --set-secrets "$SECRETS_FLAGS"
+          COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 600 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
+          if gcloud run jobs describe $AGENT_JOB --region $REGION --quiet 2>/dev/null; then
+            gcloud run jobs update $AGENT_JOB $COMMON_FLAGS
+          else
+            gcloud run jobs create $AGENT_JOB $COMMON_FLAGS
+          fi
 
       - name: Deployment summary
         run: |
