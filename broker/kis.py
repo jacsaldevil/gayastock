@@ -3,13 +3,43 @@
 공식 레퍼런스: https://github.com/koreainvestment/open-trading-api
 """
 import json
+import logging
 import os
 import time
 import requests
 from datetime import datetime, timedelta
 from config import KIS_APP_KEY, KIS_APP_SECRET, KIS_ACCOUNT_NO, KIS_BASE_URL, KIS_MOCK
 
+logger = logging.getLogger(__name__)
+
 TOKEN_CACHE_FILE = ".kis_token_cache.json"
+TOKEN_CACHE_BLOB = "kis_token_cache.json"
+# Cloud Run 환경에서는 GCS_TOKEN_BUCKET 환경변수로 버킷명 지정
+_GCS_BUCKET = os.environ.get("GCS_TOKEN_BUCKET", "")
+
+
+def _gcs_read_token() -> dict | None:
+    if not _GCS_BUCKET:
+        return None
+    try:
+        from google.cloud import storage
+        blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
+        if blob.exists():
+            return json.loads(blob.download_as_text())
+    except Exception as e:
+        logger.debug("GCS 토큰 읽기 실패: %s", e)
+    return None
+
+
+def _gcs_write_token(data: dict):
+    if not _GCS_BUCKET:
+        return
+    try:
+        from google.cloud import storage
+        blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
+        blob.upload_from_string(json.dumps(data), content_type="application/json")
+    except Exception as e:
+        logger.debug("GCS 토큰 저장 실패: %s", e)
 
 
 class KISBroker:
@@ -30,12 +60,19 @@ class KISBroker:
     # ── 인증 ─────────────────────────────────────────────
 
     def _load_cached_token(self):
-        """파일에 저장된 토큰 재사용 (공식 패턴)"""
-        if not os.path.exists(TOKEN_CACHE_FILE):
+        """GCS → 로컬 파일 순서로 캐시된 토큰 재사용"""
+        # 1. GCS 우선 시도
+        data = _gcs_read_token()
+        # 2. GCS 없으면 로컬 파일
+        if data is None and os.path.exists(TOKEN_CACHE_FILE):
+            try:
+                with open(TOKEN_CACHE_FILE, encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                return
+        if data is None:
             return
         try:
-            with open(TOKEN_CACHE_FILE, encoding="utf-8") as f:
-                data = json.load(f)
             expires_at = datetime.fromisoformat(data["expires_at"])
             if datetime.now() < expires_at:
                 self._access_token = data["access_token"]
@@ -44,9 +81,15 @@ class KISBroker:
             pass
 
     def _save_token_cache(self, token: str, expires_at: datetime):
-        with open(TOKEN_CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"access_token": token, "expires_at": expires_at.isoformat()}, f)
-        os.chmod(TOKEN_CACHE_FILE, 0o600)  # 소유자만 읽기/쓰기
+        data = {"access_token": token, "expires_at": expires_at.isoformat()}
+        # GCS와 로컬 둘 다 저장 (로컬은 개발 환경 fallback)
+        _gcs_write_token(data)
+        try:
+            with open(TOKEN_CACHE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+            os.chmod(TOKEN_CACHE_FILE, 0o600)
+        except Exception:
+            pass
 
     def _get_token(self) -> str:
         if self._access_token and self._token_expires_at and datetime.now() < self._token_expires_at:

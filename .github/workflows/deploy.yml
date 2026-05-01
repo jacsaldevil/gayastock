@@ -13,7 +13,7 @@ env:
   DASHBOARD_SERVICE: gayastock-dashboard
   AGENT_JOB: gayastock-agent
   SECRETS_FLAGS: "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
-  ENV_FLAGS: "KIS_MOCK=false,MAX_BUY_AMOUNT=500000,MAX_POSITIONS=5"
+  ENV_FLAGS: "KIS_MOCK=false,MAX_BUY_AMOUNT=500000,MAX_POSITIONS=5,GCS_TOKEN_BUCKET=gayastock-token-cache-${{ secrets.GCP_PROJECT_ID }}"
 
 jobs:
   deploy:
@@ -35,6 +35,18 @@ jobs:
 
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Ensure GCS token cache bucket exists
+        run: |
+          BUCKET="gayastock-token-cache-$PROJECT_ID"
+          if ! gcloud storage buckets describe gs://$BUCKET --quiet 2>/dev/null; then
+            gcloud storage buckets create gs://$BUCKET \
+              --location=$REGION \
+              --uniform-bucket-level-access
+            gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
+              --member="serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com" \
+              --role="roles/storage.objectAdmin"
+          fi
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker $REGISTRY --quiet
