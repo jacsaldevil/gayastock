@@ -1,10 +1,14 @@
 """Gemini function calling 도구 정의 및 실행 핸들러"""
 import json
+import os
 import re
 import google.generativeai as genai
 from data.financial import get_financial_summary
 from data.trade_log import log_trade
 from config import MAX_BUY_AMOUNT
+
+# DRY_RUN=true 이면 매수/매도 API 호출 없이 시뮬레이션 결과 반환
+DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
 
 # KISBroker 싱글턴 — financial.py와 동일 인스턴스 공유
 from data.financial import _get_broker as _get_kis_broker
@@ -156,6 +160,16 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "success": False,
                     "message": f"주문금액 {total_cost:,}원이 최대 {MAX_BUY_AMOUNT:,}원 초과",
                 }
+            elif DRY_RUN:
+                result = {
+                    "success": True,
+                    "order_no": "DRY-RUN",
+                    "message": f"[시뮬레이션] 매수 {ticker} {qty}주 @ {current_price:,}원 = {total_cost:,}원 (실제 주문 없음)",
+                    "reason": reason,
+                    "total_cost": total_cost,
+                    "dry_run": True,
+                }
+                log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False)
             else:
                 result = broker.buy_order(ticker, qty)
                 result["reason"] = reason
@@ -185,10 +199,21 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
-            result = broker.sell_order(ticker, qty)
-            result["reason"] = reason
-            if result["success"]:
-                log_trade("SELL", ticker, qty, current_price, reason, True)
+
+            if DRY_RUN:
+                result = {
+                    "success": True,
+                    "order_no": "DRY-RUN",
+                    "message": f"[시뮬레이션] 매도 {ticker} {qty}주 @ {current_price:,}원 = {current_price * qty:,}원 (실제 주문 없음)",
+                    "reason": reason,
+                    "dry_run": True,
+                }
+                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False)
+            else:
+                result = broker.sell_order(ticker, qty)
+                result["reason"] = reason
+                if result["success"]:
+                    log_trade("SELL", ticker, qty, current_price, reason, True)
 
         else:
             result = {"error": f"알 수 없는 tool: {tool_name}"}

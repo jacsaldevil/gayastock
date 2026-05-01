@@ -35,13 +35,16 @@ DEFAULT_WATCHLIST = [
 
 
 def run_trading(watchlist: list[str]):
+    from agent.tools import DRY_RUN
     agent = TradingAgent()
     logger.info("=" * 60)
-    logger.info("트레이딩 세션 시작")
+    logger.info(f"트레이딩 세션 시작{'  [DRY-RUN 시뮬레이션]' if DRY_RUN else ''}")
     result = agent.run(watchlist)
     logger.info("에이전트 판단 결과:\n" + result)
     logger.info("=" * 60)
     print("\n" + "=" * 60)
+    if DRY_RUN:
+        print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
     print(result)
     print("=" * 60)
 
@@ -49,8 +52,13 @@ def run_trading(watchlist: list[str]):
 def main():
     parser = argparse.ArgumentParser(description="gayastock 트레이딩 에이전트")
     parser.add_argument("--once", action="store_true", help="1회 즉시 실행 후 종료")
+    parser.add_argument("--dry-run", action="store_true", help="시뮬레이션 모드 (실제 주문 없음)")
     parser.add_argument("--tickers", nargs="+", help="분석할 종목코드 목록")
     args = parser.parse_args()
+
+    if args.dry_run:
+        os.environ["DRY_RUN"] = "true"
+        logger.info("DRY-RUN 모드 활성화 — 실제 주문이 실행되지 않습니다.")
 
     watchlist = args.tickers if args.tickers else DEFAULT_WATCHLIST
 
