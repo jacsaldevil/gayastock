@@ -3,8 +3,9 @@ import json
 import os
 from datetime import datetime
 
-TRADE_LOG_FILE = "logs/trades.jsonl"
-AGENT_LOG_FILE = "logs/agent_runs.jsonl"
+_LOG_DIR = os.getenv("LOG_DIR", "logs")
+TRADE_LOG_FILE = os.path.join(_LOG_DIR, "trades.jsonl")
+AGENT_LOG_FILE = os.path.join(_LOG_DIR, "agent_runs.jsonl")
 
 
 def _append(filepath: str, record: dict):
