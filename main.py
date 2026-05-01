@@ -9,7 +9,6 @@ import logging
 import os
 import schedule
 import time
-from agent.trader import TradingAgent
 
 _log_dir = os.environ.get("LOG_DIR", "logs")
 os.makedirs(_log_dir, exist_ok=True)
@@ -35,15 +34,16 @@ DEFAULT_WATCHLIST = [
 
 
 def run_trading(watchlist: list[str]):
-    from agent.tools import DRY_RUN
+    from agent.trader import TradingAgent
+    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     agent = TradingAgent()
     logger.info("=" * 60)
-    logger.info(f"트레이딩 세션 시작{'  [DRY-RUN 시뮬레이션]' if DRY_RUN else ''}")
+    logger.info(f"트레이딩 세션 시작{'  [DRY-RUN 시뮬레이션]' if dry_run else ''}")
     result = agent.run(watchlist)
     logger.info("에이전트 판단 결과:\n" + result)
     logger.info("=" * 60)
     print("\n" + "=" * 60)
-    if DRY_RUN:
+    if dry_run:
         print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
     print(result)
     print("=" * 60)

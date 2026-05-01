@@ -7,8 +7,8 @@ from data.financial import get_financial_summary
 from data.trade_log import log_trade
 from config import MAX_BUY_AMOUNT
 
-# DRY_RUN=true 이면 매수/매도 API 호출 없이 시뮬레이션 결과 반환
-DRY_RUN = os.environ.get("DRY_RUN", "false").lower() == "true"
+def _is_dry_run() -> bool:
+    return os.environ.get("DRY_RUN", "false").lower() == "true"
 
 # KISBroker 싱글턴 — financial.py와 동일 인스턴스 공유
 from data.financial import _get_broker as _get_kis_broker
@@ -160,7 +160,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "success": False,
                     "message": f"주문금액 {total_cost:,}원이 최대 {MAX_BUY_AMOUNT:,}원 초과",
                 }
-            elif DRY_RUN:
+            elif _is_dry_run():
                 result = {
                     "success": True,
                     "order_no": "DRY-RUN",
