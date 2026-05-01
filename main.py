@@ -7,7 +7,6 @@ gayastock - 재무제표 기반 국내 주식 트레이딩 에이전트
 import argparse
 import logging
 import os
-import schedule
 import time
 
 _log_dir = os.environ.get("LOG_DIR", "logs")
@@ -67,6 +66,7 @@ def main():
         return
 
     # 장 시작 후 (09:10) 와 오후 (14:00) 하루 2회 실행
+    import schedule
     schedule.every().day.at("09:10").do(run_trading, watchlist=watchlist)
     schedule.every().day.at("14:00").do(run_trading, watchlist=watchlist)
 
