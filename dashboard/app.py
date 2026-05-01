@@ -1,0 +1,195 @@
+"""gayastock 대시보드 — streamlit run dashboard/app.py"""
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import json
+from datetime import datetime
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+from broker.kis import KISBroker
+from data.trade_log import get_trades, get_agent_runs
+
+st.set_page_config(
+    page_title="gayastock 대시보드",
+    page_icon="📈",
+    layout="wide",
+)
+
+# ── 사이드바 ──────────────────────────────────────────────
+st.sidebar.title("📈 gayastock")
+st.sidebar.caption("AI 주식 트레이딩 에이전트")
+page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그"])
+refresh = st.sidebar.button("🔄 새로고침")
+
+@st.cache_data(ttl=30)
+def load_balance():
+    try:
+        broker = KISBroker()
+        return broker.get_balance()
+    except Exception as e:
+        return {"error": str(e)}
+
+if refresh:
+    st.cache_data.clear()
+
+# ══════════════════════════════════════════════════════════
+if page == "포트폴리오":
+    st.title("포트폴리오 현황")
+
+    data = load_balance()
+
+    if "error" in data:
+        st.error(f"KIS API 오류: {data['error']}")
+        st.info("`.env` 파일에 KIS API 키가 설정되어 있는지 확인하세요.")
+        st.stop()
+
+    # 상단 요약 카드
+    col1, col2, col3, col4 = st.columns(4)
+    cash = data.get("cash", 0)
+    total_eval = data.get("total_eval", 0)
+    profit_loss = data.get("profit_loss", 0)
+    holdings = data.get("holdings", [])
+
+    holding_eval = sum(h["current_price"] * h["quantity"] for h in holdings)
+    total_invested = total_eval - cash
+    pl_rate = (profit_loss / (total_invested - profit_loss) * 100) if (total_invested - profit_loss) > 0 else 0
+
+    col1.metric("예수금", f"₩{cash:,.0f}")
+    col2.metric("평가금액", f"₩{total_eval:,.0f}")
+    col3.metric("평가손익", f"₩{profit_loss:,.0f}", f"{pl_rate:+.2f}%",
+                delta_color="normal" if profit_loss >= 0 else "inverse")
+    col4.metric("보유 종목 수", f"{len(holdings)}개")
+
+    st.divider()
+
+    if not holdings:
+        st.info("현재 보유 종목이 없습니다.")
+    else:
+        # 보유 종목 테이블
+        st.subheader("보유 종목")
+        df = pd.DataFrame(holdings)
+        df["평가금액"] = df["current_price"] * df["quantity"]
+        df["매입금액"] = df["avg_price"] * df["quantity"]
+        df = df.rename(columns={
+            "ticker": "종목코드",
+            "name": "종목명",
+            "quantity": "수량",
+            "avg_price": "평균단가",
+            "current_price": "현재가",
+            "profit_loss_rate": "수익률(%)",
+        })
+        display_cols = ["종목코드", "종목명", "수량", "평균단가", "현재가", "수익률(%)", "평가금액"]
+
+        def color_pl(val):
+            color = "color: #e74c3c" if val < 0 else "color: #2ecc71" if val > 0 else ""
+            return color
+
+        st.dataframe(
+            df[display_cols].style.applymap(color_pl, subset=["수익률(%)"]).format({
+                "평균단가": "{:,.0f}",
+                "현재가": "{:,.0f}",
+                "수익률(%)": "{:+.2f}%",
+                "평가금액": "₩{:,.0f}",
+            }),
+            use_container_width=True,
+        )
+
+        st.divider()
+
+        # 포트폴리오 비중 파이차트
+        col_chart1, col_chart2 = st.columns(2)
+        with col_chart1:
+            st.subheader("종목별 비중")
+            labels = [f"{h.get('name', h['ticker'])}" for h in holdings]
+            values = [h["current_price"] * h["quantity"] for h in holdings]
+            labels.append("예수금")
+            values.append(cash)
+            fig = px.pie(names=labels, values=values, hole=0.4)
+            fig.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=300)
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col_chart2:
+            st.subheader("종목별 수익률")
+            names = [h.get("name", h["ticker"]) for h in holdings]
+            rates = [h["profit_loss_rate"] for h in holdings]
+            colors = ["#2ecc71" if r >= 0 else "#e74c3c" for r in rates]
+            fig2 = go.Figure(go.Bar(x=names, y=rates, marker_color=colors, text=[f"{r:+.2f}%" for r in rates], textposition="outside"))
+            fig2.update_layout(yaxis_title="수익률 (%)", margin=dict(t=20, b=20, l=20, r=20), height=300)
+            st.plotly_chart(fig2, use_container_width=True)
+
+# ══════════════════════════════════════════════════════════
+elif page == "매매 이력":
+    st.title("매매 이력")
+
+    trades = get_trades()
+    if not trades:
+        st.info("아직 매매 이력이 없습니다. 에이전트를 실행하면 여기에 기록됩니다.")
+        st.stop()
+
+    df = pd.DataFrame(trades)
+    df["ts"] = pd.to_datetime(df["ts"])
+    df = df.sort_values("ts", ascending=False)
+
+    # 상단 요약
+    col1, col2, col3 = st.columns(3)
+    col1.metric("총 매매 횟수", len(df))
+    col2.metric("매수", len(df[df["action"] == "BUY"]))
+    col3.metric("매도", len(df[df["action"] == "SELL"]))
+
+    st.divider()
+
+    # 매매 이력 테이블
+    display_df = df[["ts", "action", "ticker", "quantity", "price", "amount", "success", "reason"]].copy()
+    display_df.columns = ["일시", "구분", "종목코드", "수량", "체결가", "금액", "성공", "판단 근거"]
+    display_df["일시"] = display_df["일시"].dt.strftime("%Y-%m-%d %H:%M")
+    display_df["체결가"] = display_df["체결가"].apply(lambda x: f"₩{x:,.0f}")
+    display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")
+    display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # 일별 매매 금액 차트
+    st.subheader("일별 매매 금액")
+    df["date"] = df["ts"].dt.date
+    daily = df.groupby(["date", "action"])["amount"].sum().reset_index()
+    fig = px.bar(daily, x="date", y="amount", color="action",
+                 color_discrete_map={"BUY": "#2ecc71", "SELL": "#e74c3c"},
+                 labels={"date": "날짜", "amount": "금액 (원)", "action": "구분"})
+    fig.update_layout(height=300, margin=dict(t=20, b=20, l=20, r=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+# ══════════════════════════════════════════════════════════
+elif page == "에이전트 로그":
+    st.title("에이전트 실행 로그")
+
+    runs = get_agent_runs()
+    if not runs:
+        st.info("아직 에이전트 실행 기록이 없습니다. `python main.py --once` 로 실행해보세요.")
+        st.stop()
+
+    runs_reversed = list(reversed(runs))
+
+    for i, run in enumerate(runs_reversed[:20]):
+        ts = run.get("ts", "")
+        watchlist = run.get("watchlist", [])
+        summary = run.get("summary", "")
+        portfolio = run.get("portfolio", {})
+
+        cash = portfolio.get("cash", 0)
+        total_eval = portfolio.get("total_eval", 0)
+        holdings_count = len(portfolio.get("holdings", []))
+
+        label = f"🤖 {ts[:16]}  |  분석종목: {', '.join(watchlist)}  |  잔고: ₩{total_eval:,.0f}"
+        with st.expander(label, expanded=(i == 0)):
+            col1, col2, col3 = st.columns(3)
+            col1.metric("예수금", f"₩{cash:,.0f}")
+            col2.metric("총 평가금액", f"₩{total_eval:,.0f}")
+            col3.metric("보유 종목", f"{holdings_count}개")
+
+            st.markdown("**에이전트 판단 요약**")
+            st.markdown(summary)

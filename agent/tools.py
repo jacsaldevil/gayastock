@@ -2,6 +2,7 @@
 import json
 from broker.kis import KISBroker
 from data.financial import get_financial_summary
+from data.trade_log import log_trade
 from config import MAX_BUY_AMOUNT
 
 broker = KISBroker()
@@ -99,9 +100,11 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             result = broker.get_balance()
 
         elif tool_name == "buy_stock":
-            price_info = broker.get_current_price(tool_input["ticker"])
-            current_price = price_info["current_price"]
+            ticker = tool_input["ticker"]
             qty = tool_input["quantity"]
+            reason = tool_input.get("reason", "")
+            price_info = broker.get_current_price(ticker)
+            current_price = price_info["current_price"]
             total_cost = current_price * qty
 
             if total_cost > MAX_BUY_AMOUNT:
@@ -110,13 +113,20 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "message": f"주문금액 {total_cost:,}원이 최대 허용금액 {MAX_BUY_AMOUNT:,}원을 초과합니다.",
                 }
             else:
-                result = broker.buy_order(tool_input["ticker"], qty)
-                result["reason"] = tool_input.get("reason", "")
+                result = broker.buy_order(ticker, qty)
+                result["reason"] = reason
                 result["total_cost"] = total_cost
+                log_trade("BUY", ticker, qty, current_price, reason, result["success"])
 
         elif tool_name == "sell_stock":
-            result = broker.sell_order(tool_input["ticker"], tool_input["quantity"])
-            result["reason"] = tool_input.get("reason", "")
+            ticker = tool_input["ticker"]
+            qty = tool_input["quantity"]
+            reason = tool_input.get("reason", "")
+            price_info = broker.get_current_price(ticker)
+            current_price = price_info["current_price"]
+            result = broker.sell_order(ticker, qty)
+            result["reason"] = reason
+            log_trade("SELL", ticker, qty, current_price, reason, result["success"])
 
         else:
             result = {"error": f"알 수 없는 tool: {tool_name}"}

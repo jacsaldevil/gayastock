@@ -3,7 +3,8 @@ import json
 import logging
 from datetime import datetime
 import anthropic
-from agent.tools import TOOLS, execute_tool
+from agent.tools import TOOLS, execute_tool, broker
+from data.trade_log import log_agent_run
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, MAX_POSITIONS
 
 logger = logging.getLogger(__name__)
@@ -67,12 +68,16 @@ class TradingAgent:
             messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason == "end_turn":
-                # 최종 텍스트 응답 추출
                 final = next(
                     (block.text for block in response.content if hasattr(block, "text")),
                     "분석 완료"
                 )
                 logger.info("에이전트 완료")
+                try:
+                    portfolio_snapshot = broker.get_balance()
+                except Exception:
+                    portfolio_snapshot = {}
+                log_agent_run(watchlist, final, portfolio_snapshot)
                 return final
 
             if response.stop_reason == "tool_use":
