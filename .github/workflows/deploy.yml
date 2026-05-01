@@ -16,16 +16,18 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write   # Workload Identity Federation 필수
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # GCP 인증 (서비스 계정 키 방식)
-      - name: Authenticate to Google Cloud
+      # SA 키 없이 OIDC 토큰으로 GCP 인증
+      - name: Authenticate to Google Cloud (WIF)
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
@@ -34,15 +36,11 @@ jobs:
         run: gcloud auth configure-docker --quiet
 
       # ── 대시보드 ──────────────────────────────────────────
-      - name: Build Dashboard image
+      - name: Build & Push Dashboard
         run: |
           docker build \
             -t gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:$GITHUB_SHA \
-            -t gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:latest \
-            .
-
-      - name: Push Dashboard image
-        run: |
+            -t gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:latest .
           docker push gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:$GITHUB_SHA
           docker push gcr.io/$PROJECT_ID/$DASHBOARD_SERVICE:latest
 
@@ -65,16 +63,12 @@ KIS_APP_SECRET=KIS_APP_SECRET:latest,\
 KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
 
       # ── 에이전트 ──────────────────────────────────────────
-      - name: Build Agent image
+      - name: Build & Push Agent
         run: |
           docker build \
             -f Dockerfile.agent \
             -t gcr.io/$PROJECT_ID/$AGENT_JOB:$GITHUB_SHA \
-            -t gcr.io/$PROJECT_ID/$AGENT_JOB:latest \
-            .
-
-      - name: Push Agent image
-        run: |
+            -t gcr.io/$PROJECT_ID/$AGENT_JOB:latest .
           docker push gcr.io/$PROJECT_ID/$AGENT_JOB:$GITHUB_SHA
           docker push gcr.io/$PROJECT_ID/$AGENT_JOB:latest
 
@@ -95,7 +89,6 @@ KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
 
       - name: Deployment summary
         run: |
-          DASHBOARD_URL=$(gcloud run services describe $DASHBOARD_SERVICE \
+          URL=$(gcloud run services describe $DASHBOARD_SERVICE \
             --region $REGION --format "value(status.url)")
-          echo "✅ 배포 완료"
-          echo "🌐 대시보드: $DASHBOARD_URL"
+          echo "✅ 배포 완료 — 대시보드: $URL"
