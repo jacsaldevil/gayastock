@@ -100,6 +100,7 @@ jobs:
           fi
 
       - name: Ensure Cloud Scheduler jobs (3회/일)
+        continue-on-error: true
         run: |
           SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
           URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${AGENT_JOB}:run"
