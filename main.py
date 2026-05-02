@@ -8,6 +8,7 @@ import argparse
 import logging
 import os
 import time
+from datetime import date
 
 _log_dir = os.environ.get("LOG_DIR", "logs")
 os.makedirs(_log_dir, exist_ok=True)
@@ -55,7 +56,19 @@ DEFAULT_WATCHLIST = [
 ]
 
 
+def is_trading_day() -> bool:
+    import holidays
+    today = date.today()
+    if today.weekday() >= 5:
+        return False
+    kr_holidays = holidays.Korea(years=today.year)
+    return today not in kr_holidays
+
+
 def run_trading(watchlist: list[str]):
+    if not is_trading_day():
+        logger.info("오늘은 휴장일(공휴일/주말)입니다. 건너뜁니다.")
+        return
     from agent.trader import TradingAgent
     dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     agent = TradingAgent()
