@@ -22,13 +22,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 기본 관심종목 (KOSPI 대형주 예시)
+# KOSPI 우량주 20종목 — 8개 섹터 분산
 DEFAULT_WATCHLIST = [
+    # 반도체/전자
     "005930",  # 삼성전자
     "000660",  # SK하이닉스
+    "066570",  # LG전자
+    # 인터넷/플랫폼
     "035420",  # NAVER
-    "051910",  # LG화학
+    "035720",  # 카카오
+    # 자동차
+    "005380",  # 현대차
+    "000270",  # 기아
+    "012330",  # 현대모비스
+    # 2차전지/화학
+    "373220",  # LG에너지솔루션
     "006400",  # 삼성SDI
+    "051910",  # LG화학
+    # 철강/소재
+    "005490",  # POSCO홀딩스
+    "010130",  # 고려아연
+    # 금융
+    "105560",  # KB금융
+    "055550",  # 신한지주
+    "086790",  # 하나금융지주
+    # 바이오
+    "207940",  # 삼성바이오로직스
+    "068270",  # 셀트리온
+    # 통신/지주
+    "017670",  # SK텔레콤
+    "028260",  # 삼성물산
 ]
 
 
@@ -65,12 +88,13 @@ def main():
         run_trading(watchlist)
         return
 
-    # 장 시작 후 (09:10) 와 오후 (14:00) 하루 2회 실행
+    # 09:10 장 시작 / 12:00 점심 / 14:30 마감 1시간 전 — 하루 3회
     import schedule
     schedule.every().day.at("09:10").do(run_trading, watchlist=watchlist)
-    schedule.every().day.at("14:00").do(run_trading, watchlist=watchlist)
+    schedule.every().day.at("12:00").do(run_trading, watchlist=watchlist)
+    schedule.every().day.at("14:30").do(run_trading, watchlist=watchlist)
 
-    logger.info(f"스케줄러 시작 (09:10, 14:00 실행) | 관심종목: {watchlist}")
+    logger.info(f"스케줄러 시작 (09:10, 12:00, 14:30 실행) | 관심종목: {len(watchlist)}종목")
     while True:
         schedule.run_pending()
         time.sleep(30)

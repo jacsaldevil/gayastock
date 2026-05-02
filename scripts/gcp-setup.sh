@@ -108,21 +108,17 @@ gcloud run jobs create $AGENT_JOB \
 
 # 7. Cloud Scheduler 등록
 echo "⏰ Cloud Scheduler 등록 중..."
+SCHEDULER_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${AGENT_JOB}:run"
+SCHEDULER_FLAGS="--location $REGION --time-zone Asia/Seoul --uri $SCHEDULER_URI --http-method POST --oauth-service-account-email $SA_EMAIL --quiet"
+
 gcloud scheduler jobs create http "${AGENT_JOB}-morning" \
-  --location $REGION \
-  --schedule "10 9 * * 1-5" \
-  --time-zone "Asia/Seoul" \
-  --uri "https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${AGENT_JOB}:run" \
-  --http-method POST \
-  --oauth-service-account-email $SA_EMAIL --quiet 2>/dev/null || echo "  morning 이미 존재"
+  $SCHEDULER_FLAGS --schedule "10 9 * * 1-5" 2>/dev/null || echo "  morning 이미 존재"
+
+gcloud scheduler jobs create http "${AGENT_JOB}-midday" \
+  $SCHEDULER_FLAGS --schedule "0 12 * * 1-5" 2>/dev/null || echo "  midday 이미 존재"
 
 gcloud scheduler jobs create http "${AGENT_JOB}-afternoon" \
-  --location $REGION \
-  --schedule "0 14 * * 1-5" \
-  --time-zone "Asia/Seoul" \
-  --uri "https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${AGENT_JOB}:run" \
-  --http-method POST \
-  --oauth-service-account-email $SA_EMAIL --quiet 2>/dev/null || echo "  afternoon 이미 존재"
+  $SCHEDULER_FLAGS --schedule "30 14 * * 1-5" 2>/dev/null || echo "  afternoon 이미 존재"
 
 # 결과 출력
 echo ""
