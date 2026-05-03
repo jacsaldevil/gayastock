@@ -253,7 +253,7 @@ elif page == "에이전트 로그":
 # ══════════════════════════════════════════════════════════
 elif page == "Dry Run 시뮬레이션":
     st.title("🧪 Dry Run 시뮬레이션")
-    st.caption("실제 주문 없이 스케줄러 3회 실행(09:10 / 12:00 / 14:30) 시 에이전트 판단을 시뮬레이션합니다. 가상 포트폴리오가 3회 연속 연동됩니다.")
+    st.caption("실제 주문 없이 스케줄러 5회 실행(09:40 / 11:00 / 12:30 / 14:00 / 15:10) 시 에이전트 판단을 시뮬레이션합니다. 가상 포트폴리오가 5회 연속 연동됩니다.")
 
     # ── 비밀번호 확인 ──────────────────────────────────────
     pw = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
@@ -391,16 +391,8 @@ elif page == "Dry Run 시뮬레이션":
             check -= timedelta(days=1)
         return result
 
-    DEFAULT_WATCHLIST = [
-        "005930", "000660", "066570",
-        "035420", "035720",
-        "005380", "000270", "012330",
-        "373220", "006400", "051910",
-        "005490", "010130",
-        "105560", "055550", "086790",
-        "207940", "068270",
-        "017670", "028260",
-    ]
+    # v4: 고정 워치리스트 없음 — 매 실행마다 거래량 Top5 동적 스캔
+    DEFAULT_WATCHLIST: list[str] = []
 
     # ── 모바일 테이블 CSS ──────────────────────────────────
     st.markdown("""
@@ -429,7 +421,7 @@ elif page == "Dry Run 시뮬레이션":
         finished_disp = (sim_data.get("finished_at") or "")[:16].replace("T", " ")
         results = sim_data.get("results", {})
         if status == "running":
-            st.warning(f"⏳ 실행 중... ({len(results)}/3 완료) — 새로고침으로 업데이트")
+            st.warning(f"⏳ 실행 중... ({len(results)}/5 완료) — 새로고침으로 업데이트")
         elif status == "done":
             st.success(f"✅ 완료 — {finished_disp}")
         if not results:
@@ -496,11 +488,13 @@ elif page == "Dry Run 시뮬레이션":
     base_date = trading_days[day_labels.index(selected_label)]
     base_date_str = base_date.strftime("%Y-%m-%d")
     schedule_times = [
-        (datetime.combine(base_date, datetime.strptime("09:10", "%H:%M").time()), "09:10 오전"),
-        (datetime.combine(base_date, datetime.strptime("12:00", "%H:%M").time()), "12:00 점심"),
-        (datetime.combine(base_date, datetime.strptime("14:30", "%H:%M").time()), "14:30 오후"),
+        (datetime.combine(base_date, datetime.strptime("09:40", "%H:%M").time()), "09:40 진입"),
+        (datetime.combine(base_date, datetime.strptime("11:00", "%H:%M").time()), "11:00 점검"),
+        (datetime.combine(base_date, datetime.strptime("12:30", "%H:%M").time()), "12:30 점검"),
+        (datetime.combine(base_date, datetime.strptime("14:00", "%H:%M").time()), "14:00 후반"),
+        (datetime.combine(base_date, datetime.strptime("15:10", "%H:%M").time()), "15:10 청산"),
     ]
-    st.info(f"📅 기준일 **{base_date_str}** | 3회 연속 시뮬레이션 (가상 포트폴리오 연동) — 실제 주문 없음")
+    st.info(f"📅 기준일 **{base_date_str}** | 5회 연속 시뮬레이션 (가상 포트폴리오 연동) — 실제 주문 없음")
 
     if _GCS_DATA_BUCKET:
         col_run, col_refresh, col_info = st.columns([1, 1, 2])
@@ -543,7 +537,7 @@ elif page == "Dry Run 시뮬레이션":
             try:
                 from agent.trader import TradingAgent
                 for idx_run, (sim_dt, label) in enumerate(schedule_times):
-                    progress.progress(idx_run / 3, text=f"⏳ {label} 판단 중...")
+                    progress.progress(idx_run / 5, text=f"⏳ {label} 판단 중...")
                     try:
                         agent = TradingAgent()
                         result_text = agent.run(

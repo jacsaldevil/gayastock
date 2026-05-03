@@ -22,3 +22,5 @@ KIS_BASE_URL = (
 # 트레이딩 설정
 MAX_BUY_AMOUNT = int(os.getenv("MAX_BUY_AMOUNT", "500000"))
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
+TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "4.0"))
+STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "2.5"))

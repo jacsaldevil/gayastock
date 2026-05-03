@@ -3,9 +3,7 @@ import json
 import os
 import re
 import google.generativeai as genai
-from data.financial import get_financial_summary
 from data.trade_log import log_trade
-from config import MAX_BUY_AMOUNT
 
 def _is_dry_run() -> bool:
     return os.environ.get("DRY_RUN", "false").lower() == "true"
@@ -56,28 +54,6 @@ GEMINI_TOOLS = genai.protos.Tool(
             ),
         ),
         genai.protos.FunctionDeclaration(
-            name="get_financial_statements",
-            description=(
-                "KIS API 기반 재무제표 요약 조회 (DART 불필요). "
-                "매출액, 영업이익, 당기순이익, ROE, 부채비율, 영업이익률, "
-                "PER, PBR, 전년 대비 매출 성장률, 최근 3개년 추이 포함."
-            ),
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
-                properties={
-                    "ticker": genai.protos.Schema(
-                        type=genai.protos.Type.STRING,
-                        description="6자리 종목코드",
-                    ),
-                    "annual": genai.protos.Schema(
-                        type=genai.protos.Type.BOOLEAN,
-                        description="true=연간(기본), false=분기",
-                    ),
-                },
-                required=["ticker"],
-            ),
-        ),
-        genai.protos.FunctionDeclaration(
             name="get_portfolio",
             description="현재 보유 종목, 수익률, 예수금(현금) 잔고를 조회합니다.",
             parameters=genai.protos.Schema(
@@ -88,8 +64,9 @@ GEMINI_TOOLS = genai.protos.Tool(
         genai.protos.FunctionDeclaration(
             name="buy_stock",
             description=(
-                f"주식을 시장가로 매수합니다. 1회 최대 {MAX_BUY_AMOUNT:,}원 이내. "
-                "매수 전 get_portfolio로 예수금, get_stock_price로 현재가를 반드시 확인하세요."
+                "주식을 시장가로 매수합니다. "
+                "매수 전 get_portfolio로 예수금, get_stock_price로 현재가를 반드시 확인하세요. "
+                "포지션 사이징: 가용예수금 × HA강도 비율 ÷ 남은 슬롯 수로 계산하세요."
             ),
             parameters=genai.protos.Schema(
                 type=genai.protos.Type.OBJECT,
@@ -114,8 +91,7 @@ GEMINI_TOOLS = genai.protos.Tool(
             name="get_top_volume_stocks",
             description=(
                 "현재 시장 거래량 상위 종목을 조회합니다. "
-                "고정 워치리스트 외에 오늘 시장에서 주목받는 종목을 발굴할 때 사용하세요. "
-                "반환된 종목은 '발굴 종목'으로 분류하여 더 엄격한 재무 기준을 적용해야 합니다."
+                "반환된 목록에서 ETF/스팩/리츠 등을 제외한 후 상위 5종목을 분석 대상으로 선정하세요."
             ),
             parameters=genai.protos.Schema(
                 type=genai.protos.Type.OBJECT,
@@ -181,13 +157,6 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             _validate_ticker(tool_input["ticker"])
             result = broker.get_current_price(tool_input["ticker"])
 
-        elif tool_name == "get_financial_statements":
-            _validate_ticker(tool_input["ticker"])
-            result = get_financial_summary(
-                tool_input["ticker"],
-                annual=tool_input.get("annual", True),
-            )
-
         elif tool_name == "get_top_volume_stocks":
             n = int(tool_input.get("n", 20))
             result = broker.get_top_volume_stocks(n)
@@ -219,12 +188,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             current_price = price_info["current_price"]
             total_cost = current_price * qty
 
-            if total_cost > MAX_BUY_AMOUNT:
-                result = {
-                    "success": False,
-                    "message": f"주문금액 {total_cost:,}원이 최대 {MAX_BUY_AMOUNT:,}원 초과",
-                }
-            elif _is_dry_run():
+            if _is_dry_run():
                 if _sim_portfolio is not None:
                     available = _sim_portfolio.get("cash", 0)
                     if total_cost > available:

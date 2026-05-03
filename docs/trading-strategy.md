@@ -441,9 +441,11 @@ MAX_BUY_AMOUNT   = ?      # 1회 최대 매수 금액 (예수금에 맞게 설�
 
 - [x] `get_top_volume_stocks` — 이미 구현됨 (`broker/kis.py`)
 - [x] `get_heikin_ashi_candles` — 이미 구현됨 (`broker/kis.py`)
-- [x] 가상 포트폴리오 체인 (시뮬레이션 3회→5회 연동) — 이미 구현됨
-- [ ] `config.py` — `TAKE_PROFIT_PCT`, `STOP_LOSS_PCT` 추가
-- [ ] `prompts/system_prompt.md` — 재무 필터 제거, v4 룰로 전면 재작성
+- [x] 가상 포트폴리오 체인 (시뮬레이션 5회 연동) — 이미 구현됨
+- [x] `config.py` — `TAKE_PROFIT_PCT`, `STOP_LOSS_PCT` 추가
+- [x] `prompts/system_prompt.md` — 재무 필터 제거, v4 룰로 전면 재작성
+- [x] `agent/tools.py` — `get_financial_statements` 제거, `buy_stock` 설명 업데이트
+- [x] `agent/trader.py` — 회차별 run context 주입, TP/SL 포맷 변수 추가
+- [x] 대시보드 시뮬레이션 — 스케줄 5회 반영 (09:40/11:00/12:30/14:00/15:10)
 - [ ] Cloud Scheduler — 5회로 변경 (09:40 / 11:00 / 12:30 / 14:00 / 15:10)
-- [ ] 대시보드 시뮬레이션 — 스케줄 5회 반영
 - [ ] dry-run 검증

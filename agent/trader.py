@@ -1,21 +1,39 @@
 """Gemini 기반 주식 트레이딩 에이전트"""
 import logging
-from datetime import datetime
+from datetime import datetime, time as dtime
 from pathlib import Path
 from data.utils import get_now_kst
 import google.generativeai as genai
 from agent.tools import GEMINI_TOOLS, execute_tool, _broker, set_sim_portfolio, get_sim_portfolio
 from data.trade_log import log_agent_run
-from config import GOOGLE_API_KEY, GEMINI_MODEL, MAX_POSITIONS
+from config import GOOGLE_API_KEY, GEMINI_MODEL, MAX_POSITIONS, TAKE_PROFIT_PCT, STOP_LOSS_PCT
 
 logger = logging.getLogger(__name__)
 
 genai.configure(api_key=GOOGLE_API_KEY)
 
 _PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "system_prompt.md"
-SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").format(MAX_POSITIONS=MAX_POSITIONS)
+SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").format(
+    MAX_POSITIONS=MAX_POSITIONS,
+    TAKE_PROFIT_PCT=TAKE_PROFIT_PCT,
+    STOP_LOSS_PCT=STOP_LOSS_PCT,
+)
 
 MAX_TOOL_ROUNDS = 30
+
+_SCHEDULE_SLOTS = [
+    (dtime(9, 40),  "【1회차 — 진입】장 시작 30분 경과. Top5 스캔 후 HA 신호 강한 종목 적극 매수."),
+    (dtime(11, 0),  "【2회차 — 점검】보유 종목 TP/SL 먼저 확인. 신규 기회 있으면 추가 진입 가능."),
+    (dtime(12, 30), "【3회차 — 점검】보유 종목 TP/SL 확인. 신규 진입은 HA 신호 명확할 때만 신중하게."),
+    (dtime(14, 0),  "【4회차 — 후반 점검】TP/SL 확인. 신규 진입은 강한상승 2봉+ 이상일 때만 허용."),
+    (dtime(15, 10), "【5회차 — 강제 청산】신규 매수 절대 금지. 보유 전종목 즉시 전량 매도."),
+]
+
+
+def _get_run_context(now: datetime) -> str:
+    mins = now.hour * 60 + now.minute
+    best = min(_SCHEDULE_SLOTS, key=lambda s: abs(s[0].hour * 60 + s[0].minute - mins))
+    return best[1]
 
 
 class TradingAgent:
@@ -41,14 +59,15 @@ class TradingAgent:
         try:
             now = sim_datetime or get_now_kst()
             today = now.strftime("%Y-%m-%d %H:%M")
+            run_ctx = _get_run_context(now)
             user_message = (
-                f"[{today}] 트레이딩을 시작합니다.\n"
-                f"기본 분석 종목(워치리스트): {', '.join(watchlist)}\n\n"
+                f"[{today}] {run_ctx}\n"
+                "트레이딩을 시작합니다.\n\n"
                 "1. 현재 포트폴리오를 확인하세요.\n"
-                "2. 워치리스트 종목의 현재가와 재무제표를 분석하세요.\n"
-                "3. 필요시 get_top_volume_stocks로 시장 관심 종목을 추가 발굴하세요 (발굴 종목은 더 엄격한 기준 적용).\n"
-                "4. 매수/매도/보유 판단을 내리고 필요시 주문을 실행하세요.\n"
-                "5. 분석 결과와 판단 근거를 요약해 주세요."
+                "2. TP/SL 조건 해당 종목을 즉시 처리하세요.\n"
+                "3. get_top_volume_stocks(n=20)으로 거래량 Top20 스캔 후 ETF/스팩 제외, 상위 5종목 선정하세요.\n"
+                "4. 각 종목의 현재가와 하이킨아시 패턴을 확인하고 매수/보류를 판단하세요.\n"
+                "5. 분석 결과와 판단 근거를 최종 보고서 형식으로 작성하세요."
             )
 
             logger.info(f"트레이딩 에이전트 시작: {watchlist}")
