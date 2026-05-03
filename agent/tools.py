@@ -17,6 +17,19 @@ def _broker():
     return _get_kis_broker()
 
 
+# ── 가상 포트폴리오 상태 (dry-run 시뮬레이션용) ─────────────────
+_sim_portfolio: dict | None = None
+
+
+def set_sim_portfolio(portfolio: dict | None) -> None:
+    global _sim_portfolio
+    _sim_portfolio = portfolio
+
+
+def get_sim_portfolio() -> dict | None:
+    return _sim_portfolio
+
+
 def _validate_ticker(ticker: str):
     if not re.fullmatch(r"\d{6}", str(ticker)):
         raise ValueError(f"유효하지 않은 종목코드: {ticker!r} (6자리 숫자여야 합니다)")
@@ -184,7 +197,14 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             result = broker.get_minute_candles(tool_input["ticker"])
 
         elif tool_name == "get_portfolio":
-            result = broker.get_balance()
+            if _is_dry_run():
+                global _sim_portfolio
+                if _sim_portfolio is None:
+                    # 첫 호출 시 실제 잔고로 가상 포트폴리오 초기화
+                    _sim_portfolio = broker.get_balance()
+                result = _sim_portfolio
+            else:
+                result = broker.get_balance()
 
         elif tool_name == "buy_stock":
             ticker = tool_input["ticker"]
@@ -205,15 +225,58 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "message": f"주문금액 {total_cost:,}원이 최대 {MAX_BUY_AMOUNT:,}원 초과",
                 }
             elif _is_dry_run():
-                result = {
-                    "success": True,
-                    "order_no": "DRY-RUN",
-                    "message": f"[시뮬레이션] 매수 {ticker} {qty}주 @ {current_price:,}원 = {total_cost:,}원 (실제 주문 없음)",
-                    "reason": reason,
-                    "total_cost": total_cost,
-                    "dry_run": True,
-                }
-                log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False)
+                if _sim_portfolio is not None:
+                    available = _sim_portfolio.get("cash", 0)
+                    if total_cost > available:
+                        result = {
+                            "success": False,
+                            "message": f"가상 예수금 부족: 보유 {available:,}원 < 필요 {total_cost:,}원",
+                        }
+                    else:
+                        _sim_portfolio["cash"] = available - total_cost
+                        holdings = _sim_portfolio.setdefault("holdings", [])
+                        existing = next((h for h in holdings if h["ticker"] == ticker), None)
+                        if existing:
+                            prev_qty = existing["quantity"]
+                            prev_avg = existing["avg_price"]
+                            new_qty = prev_qty + qty
+                            existing["avg_price"] = round((prev_avg * prev_qty + current_price * qty) / new_qty)
+                            existing["quantity"] = new_qty
+                            existing["current_price"] = current_price
+                            existing["profit_loss_rate"] = round(
+                                (current_price - existing["avg_price"]) / existing["avg_price"] * 100, 2
+                            )
+                        else:
+                            holdings.append({
+                                "ticker": ticker,
+                                "name": price_info.get("name", ticker),
+                                "quantity": qty,
+                                "avg_price": current_price,
+                                "current_price": current_price,
+                                "profit_loss_rate": 0.0,
+                            })
+                        result = {
+                            "success": True,
+                            "order_no": "DRY-RUN",
+                            "message": (
+                                f"[시뮬레이션] 매수 {ticker} {qty}주 @ {current_price:,}원 = {total_cost:,}원 "
+                                f"(가상포트폴리오 반영 — 잔여 예수금 {_sim_portfolio['cash']:,}원)"
+                            ),
+                            "reason": reason,
+                            "total_cost": total_cost,
+                            "dry_run": True,
+                        }
+                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False)
+                else:
+                    result = {
+                        "success": True,
+                        "order_no": "DRY-RUN",
+                        "message": f"[시뮬레이션] 매수 {ticker} {qty}주 @ {current_price:,}원 = {total_cost:,}원 (실제 주문 없음)",
+                        "reason": reason,
+                        "total_cost": total_cost,
+                        "dry_run": True,
+                    }
+                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False)
             else:
                 result = broker.buy_order(ticker, qty)
                 result["reason"] = reason
@@ -230,8 +293,12 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             if qty <= 0:
                 return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
 
-            # 보유 수량 사전 검증
-            balance = broker.get_balance()
+            # 보유 수량 사전 검증 — dry-run은 가상 포트폴리오에서 확인
+            if _is_dry_run() and _sim_portfolio is not None:
+                balance = _sim_portfolio
+            else:
+                balance = broker.get_balance()
+
             holding = next((h for h in balance["holdings"] if h["ticker"] == ticker), None)
             if not holding:
                 return json.dumps({"success": False, "message": f"{ticker} 미보유 종목입니다."}, ensure_ascii=False)
@@ -245,10 +312,25 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             current_price = price_info["current_price"]
 
             if _is_dry_run():
+                if _sim_portfolio is not None:
+                    proceeds = current_price * qty
+                    _sim_portfolio["cash"] = _sim_portfolio.get("cash", 0) + proceeds
+                    h = next((x for x in _sim_portfolio["holdings"] if x["ticker"] == ticker), None)
+                    if h:
+                        if h["quantity"] <= qty:
+                            _sim_portfolio["holdings"].remove(h)
+                        else:
+                            h["quantity"] -= qty
+                    message = (
+                        f"[시뮬레이션] 매도 {ticker} {qty}주 @ {current_price:,}원 = {proceeds:,}원 "
+                        f"(가상포트폴리오 반영 — 잔여 예수금 {_sim_portfolio['cash']:,}원)"
+                    )
+                else:
+                    message = f"[시뮬레이션] 매도 {ticker} {qty}주 @ {current_price:,}원 = {current_price * qty:,}원 (실제 주문 없음)"
                 result = {
                     "success": True,
                     "order_no": "DRY-RUN",
-                    "message": f"[시뮬레이션] 매도 {ticker} {qty}주 @ {current_price:,}원 = {current_price * qty:,}원 (실제 주문 없음)",
+                    "message": message,
                     "reason": reason,
                     "dry_run": True,
                 }
