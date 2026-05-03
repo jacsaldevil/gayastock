@@ -350,7 +350,7 @@ elif page == "Dry Run 시뮬레이션":
         os.environ["DRY_RUN"] = "true"
         data = _load_sim_data(sim_id) or {
             "id": sim_id, "status": "running",
-            "base_date": base_date_str, "created_at": datetime.now().isoformat(), "results": {},
+            "base_date": base_date_str, "created_at": get_now_kst().isoformat(), "results": {},
         }
         try:
             from agent.trader import TradingAgent
@@ -369,7 +369,7 @@ elif page == "Dry Run 시뮬레이션":
         finally:
             os.environ["DRY_RUN"] = "false"
             data["status"] = "done"
-            data["finished_at"] = datetime.now().isoformat()
+            data["finished_at"] = get_now_kst().isoformat()
             _write(data)
             _mark_done_in_index(data["finished_at"])
 
@@ -377,7 +377,7 @@ elif page == "Dry Run 시뮬레이션":
     import holidays as hol
 
     def get_recent_trading_days(n=60):
-        now = datetime.now()
+        now = get_now_kst()
         kr_holidays = hol.Korea(years=[now.year, now.year - 1])
         today = now.date()
         market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
@@ -503,8 +503,9 @@ elif page == "Dry Run 시뮬레이션":
         col_info.caption("앱 전환 후 돌아와도 '결과 확인'으로 진행 상황을 볼 수 있습니다")
 
         if run_btn:
-            sim_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-            created_at = datetime.now().isoformat()
+            _now = get_now_kst()
+            sim_id = _now.strftime("%Y%m%d_%H%M%S")
+            created_at = _now.isoformat()
             init_data = {
                 "id": sim_id, "status": "running",
                 "base_date": base_date_str, "created_at": created_at, "results": {},
@@ -528,8 +529,9 @@ elif page == "Dry Run 시뮬레이션":
         # 로컬 모드: 동기 실행 + 가상 포트폴리오 체인
         run_btn = st.button("🚀 시뮬레이션 실행", type="primary")
         if run_btn:
-            sim_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-            created_at = datetime.now().isoformat()
+            _now = get_now_kst()
+            sim_id = _now.strftime("%Y%m%d_%H%M%S")
+            created_at = _now.isoformat()
             os.environ["DRY_RUN"] = "true"
             results = {}
             sim_portfolio = None
@@ -554,7 +556,7 @@ elif page == "Dry Run 시뮬레이션":
                 progress.progress(1.0, text="✅ 완료!")
             finally:
                 os.environ["DRY_RUN"] = "false"
-            finished_at = datetime.now().isoformat()
+            finished_at = get_now_kst().isoformat()
             sim_data_new = {
                 "id": sim_id, "status": "done",
                 "base_date": base_date_str, "created_at": created_at,
