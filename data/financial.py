@@ -36,6 +36,16 @@ def get_financial_summary(ticker: str, annual: bool = True) -> dict:
     latest_balance = balance[0]
     latest_ratio = ratio[0] if ratio else {}
 
+    # 영업이익률: ratio API 우선, 0이면 income statement에서 직접 계산
+    operating_margin = latest_ratio.get("operating_margin_pct", 0)
+    if not operating_margin:
+        operating_margin = latest_income.get("operating_margin_pct", 0)
+
+    # ROE: ratio API 우선, 0이면 직접 계산 (순이익/자본)
+    roe = latest_ratio.get("roe_pct", 0)
+    if not roe and latest_balance["total_equity"]:
+        roe = round(latest_income["net_profit"] / latest_balance["total_equity"] * 100, 2)
+
     # 전년 대비 매출 성장률
     yoy_revenue_growth = None
     if len(income) >= 2 and income[1]["revenue"]:
@@ -46,25 +56,20 @@ def get_financial_summary(ticker: str, annual: bool = True) -> dict:
     return {
         "ticker": ticker,
         "period": latest_income["period"],
-        # 손익계산서
         "revenue": latest_income["revenue"],
         "operating_profit": latest_income["operating_profit"],
         "net_profit": latest_income["net_profit"],
         "eps": latest_income["eps"],
-        # 대차대조표
         "total_assets": latest_balance["total_assets"],
         "total_equity": latest_balance["total_equity"],
         "total_debt": latest_balance["total_debt"],
         "debt_ratio_pct": latest_balance["debt_ratio_pct"],
-        # 재무비율
-        "roe_pct": latest_ratio.get("roe_pct", 0),
-        "operating_margin_pct": latest_ratio.get("operating_margin_pct", 0),
+        "roe_pct": roe,
+        "operating_margin_pct": operating_margin,
         "net_margin_pct": latest_ratio.get("net_margin_pct", 0),
         "per": latest_ratio.get("per", 0),
         "pbr": latest_ratio.get("pbr", 0),
-        # 성장성
         "yoy_revenue_growth_pct": yoy_revenue_growth,
-        # 원시 데이터 (Claude가 추가 분석 가능하도록)
         "income_history": income[:3],
         "balance_history": balance[:3],
     }

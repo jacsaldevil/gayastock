@@ -198,26 +198,48 @@ class KISBroker:
 
     # ── 재무제표 (KIS 자체 API, DART 불필요) ──────────────
 
+    def _get_finance(self, url: str, tr_id: str, params: dict) -> dict:
+        """재무 API 호출 — 500 에러 시 1회 재시도"""
+        for attempt in range(2):
+            try:
+                res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+                if res.status_code == 500 and attempt == 0:
+                    logger.warning("재무 API 500 에러, 1초 후 재시도 (%s)", url)
+                    time.sleep(1)
+                    continue
+                res.raise_for_status()
+                self._smart_sleep()
+                return res.json()
+            except requests.HTTPError as e:
+                if attempt == 1:
+                    raise
+                logger.warning("재무 API 오류 재시도: %s", e)
+                time.sleep(1)
+        return {}
+
     def get_income_statement(self, ticker: str, annual: bool = True) -> list[dict]:
         """손익계산서 (TR: FHKST66430200) — 최대 4개 연도/분기"""
         url = f"{self.base_url}/uapi/domestic-stock/v1/finance/income-statement"
         params = {
-            "FID_DIV_CLS_CODE": "0" if annual else "1",  # 0=연간, 1=분기
+            "FID_DIV_CLS_CODE": "0" if annual else "1",
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": ticker,
         }
-        res = requests.get(url, headers=self._headers("FHKST66430200"), params=params, timeout=10)
-        res.raise_for_status()
-        self._smart_sleep()
-        rows = res.json().get("output", [])
+        data = self._get_finance(url, "FHKST66430200", params)
+        rows = data.get("output", [])
         result = []
         for r in rows:
+            revenue = _to_int(r.get("sale_account"))
+            operating_profit = _to_int(r.get("bsop_prti"))        # 영업이익
+            net_profit = _to_int(r.get("thtr_ntin"))               # 당기순이익
             result.append({
-                "period": r.get("stac_yymm", ""),        # 결산년월
-                "revenue": _to_int(r.get("sale_account")),       # 매출액
-                "operating_profit": _to_int(r.get("sale_totl_prfi")),  # 영업이익
-                "net_profit": _to_int(r.get("bsop_prti")),       # 당기순이익
+                "period": r.get("stac_yymm", ""),
+                "revenue": revenue,
+                "operating_profit": operating_profit,
+                "net_profit": net_profit,
                 "eps": _to_float(r.get("eps")),
+                # 영업이익률 직접 계산 (ratio API 0 반환 대비 fallback)
+                "operating_margin_pct": round(operating_profit / revenue * 100, 2) if revenue else 0,
             })
         return result
 
@@ -229,10 +251,8 @@ class KISBroker:
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": ticker,
         }
-        res = requests.get(url, headers=self._headers("FHKST66430100"), params=params, timeout=10)
-        res.raise_for_status()
-        self._smart_sleep()
-        rows = res.json().get("output", [])
+        data = self._get_finance(url, "FHKST66430100", params)
+        rows = data.get("output", [])
         result = []
         for r in rows:
             total_equity = _to_int(r.get("total_cptl"))
@@ -240,9 +260,9 @@ class KISBroker:
             debt_ratio = round(total_debt / total_equity * 100, 2) if total_equity else 0
             result.append({
                 "period": r.get("stac_yymm", ""),
-                "total_assets": _to_int(r.get("total_aset")),    # 자산총계
-                "total_equity": total_equity,                     # 자본총계
-                "total_debt": total_debt,                         # 부채총계
+                "total_assets": _to_int(r.get("total_aset")),
+                "total_equity": total_equity,
+                "total_debt": total_debt,
                 "debt_ratio_pct": debt_ratio,
             })
         return result
@@ -255,17 +275,15 @@ class KISBroker:
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": ticker,
         }
-        res = requests.get(url, headers=self._headers("FHKST66430300"), params=params, timeout=10)
-        res.raise_for_status()
-        self._smart_sleep()
-        rows = res.json().get("output", [])
+        data = self._get_finance(url, "FHKST66430300", params)
+        rows = data.get("output", [])
         result = []
         for r in rows:
             result.append({
                 "period": r.get("stac_yymm", ""),
-                "roe_pct": _to_float(r.get("roe_val")),            # ROE
-                "operating_margin_pct": _to_float(r.get("bsop_prfi_rate")),  # 영업이익률
-                "net_margin_pct": _to_float(r.get("net_prfi_rate")),          # 순이익률
+                "roe_pct": _to_float(r.get("roe_val")),
+                "operating_margin_pct": _to_float(r.get("bsop_prfi_rate")),
+                "net_margin_pct": _to_float(r.get("net_prfi_rate")),
                 "per": _to_float(r.get("per")),
                 "pbr": _to_float(r.get("pbr")),
             })
