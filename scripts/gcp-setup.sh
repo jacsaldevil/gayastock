@@ -111,14 +111,25 @@ echo "⏰ Cloud Scheduler 등록 중..."
 SCHEDULER_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${AGENT_JOB}:run"
 SCHEDULER_FLAGS="--location $REGION --time-zone Asia/Seoul --uri $SCHEDULER_URI --http-method POST --oauth-service-account-email $SA_EMAIL --quiet"
 
-gcloud scheduler jobs create http "${AGENT_JOB}-morning" \
-  $SCHEDULER_FLAGS --schedule "10 9 * * 1-5" 2>/dev/null || echo "  morning 이미 존재"
+# 구 3회 job 제거 (있으면)
+for OLD_JOB in "${AGENT_JOB}-morning" "${AGENT_JOB}-midday" "${AGENT_JOB}-afternoon"; do
+  gcloud scheduler jobs delete "$OLD_JOB" --location $REGION --quiet 2>/dev/null && echo "  $OLD_JOB 삭제됨" || true
+done
 
-gcloud scheduler jobs create http "${AGENT_JOB}-midday" \
-  $SCHEDULER_FLAGS --schedule "0 12 * * 1-5" 2>/dev/null || echo "  midday 이미 존재"
+gcloud scheduler jobs create http "${AGENT_JOB}-run1" \
+  $SCHEDULER_FLAGS --schedule "40 9 * * 1-5" 2>/dev/null || echo "  run1 이미 존재"
 
-gcloud scheduler jobs create http "${AGENT_JOB}-afternoon" \
-  $SCHEDULER_FLAGS --schedule "30 14 * * 1-5" 2>/dev/null || echo "  afternoon 이미 존재"
+gcloud scheduler jobs create http "${AGENT_JOB}-run2" \
+  $SCHEDULER_FLAGS --schedule "0 11 * * 1-5" 2>/dev/null || echo "  run2 이미 존재"
+
+gcloud scheduler jobs create http "${AGENT_JOB}-run3" \
+  $SCHEDULER_FLAGS --schedule "30 12 * * 1-5" 2>/dev/null || echo "  run3 이미 존재"
+
+gcloud scheduler jobs create http "${AGENT_JOB}-run4" \
+  $SCHEDULER_FLAGS --schedule "0 14 * * 1-5" 2>/dev/null || echo "  run4 이미 존재"
+
+gcloud scheduler jobs create http "${AGENT_JOB}-run5" \
+  $SCHEDULER_FLAGS --schedule "10 15 * * 1-5" 2>/dev/null || echo "  run5 이미 존재"
 
 # 결과 출력
 echo ""

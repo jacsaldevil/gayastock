@@ -99,23 +99,34 @@ jobs:
             gcloud run jobs create $AGENT_JOB $COMMON_FLAGS
           fi
 
-      - name: Ensure Cloud Scheduler jobs (3회/일)
+      - name: Remove old Cloud Scheduler jobs (3회 → 5회 전환)
+        continue-on-error: true
+        run: |
+          for OLD in "${AGENT_JOB}-morning" "${AGENT_JOB}-midday" "${AGENT_JOB}-afternoon"; do
+            gcloud scheduler jobs delete "$OLD" --location $REGION --quiet 2>/dev/null || true
+          done
+
+      - name: Ensure Cloud Scheduler jobs (5회/일)
         continue-on-error: true
         run: |
           SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
           URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${AGENT_JOB}:run"
           FLAGS="--location $REGION --time-zone Asia/Seoul --uri $URI --http-method POST --oauth-service-account-email $SA --quiet"
 
-          for JOB_NAME in "${AGENT_JOB}-morning" "${AGENT_JOB}-midday" "${AGENT_JOB}-afternoon"; do
-            case $JOB_NAME in
-              *morning)   CRON="10 9 * * 1-5" ;;
-              *midday)    CRON="0 12 * * 1-5" ;;
-              *afternoon) CRON="30 14 * * 1-5" ;;
-            esac
-            if gcloud scheduler jobs describe $JOB_NAME --location $REGION --quiet 2>/dev/null; then
-              gcloud scheduler jobs update http $JOB_NAME $FLAGS --schedule "$CRON"
+          declare -A SCHEDULES=(
+            ["${AGENT_JOB}-run1"]="40 9 * * 1-5"
+            ["${AGENT_JOB}-run2"]="0 11 * * 1-5"
+            ["${AGENT_JOB}-run3"]="30 12 * * 1-5"
+            ["${AGENT_JOB}-run4"]="0 14 * * 1-5"
+            ["${AGENT_JOB}-run5"]="10 15 * * 1-5"
+          )
+
+          for JOB_NAME in "${!SCHEDULES[@]}"; do
+            CRON="${SCHEDULES[$JOB_NAME]}"
+            if gcloud scheduler jobs describe "$JOB_NAME" --location $REGION --quiet 2>/dev/null; then
+              gcloud scheduler jobs update http "$JOB_NAME" $FLAGS --schedule "$CRON"
             else
-              gcloud scheduler jobs create http $JOB_NAME $FLAGS --schedule "$CRON"
+              gcloud scheduler jobs create http "$JOB_NAME" $FLAGS --schedule "$CRON"
             fi
           done
 
