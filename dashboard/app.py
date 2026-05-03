@@ -253,44 +253,32 @@ elif page == "Dry Run 시뮬레이션":
     if not pw:
         st.stop()
 
-    # ── 기준 날짜 선택 ────────────────────────────────────────
+    # ── 기준 날짜 선택 (거래일만 표시) ──────────────────────────
     import holidays as hol
+    from datetime import date as date_type
 
-    def get_last_trading_date():
+    def get_recent_trading_days(n=60):
+        """최근 n개 거래일 목록 반환 (최신 순)"""
         now = datetime.now()
         kr_holidays = hol.Korea(years=[now.year, now.year - 1])
         today = now.date()
         market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-        if today.weekday() < 5 and today not in kr_holidays and now >= market_open:
-            return today
-        check = today - timedelta(days=1)
-        while check.weekday() >= 5 or check in kr_holidays:
+        result = []
+        check = today
+        # 오늘 장이 아직 안 열렸으면 어제부터 탐색
+        if today.weekday() >= 5 or today in kr_holidays or now < market_open:
             check -= timedelta(days=1)
-        return check
+        while len(result) < n:
+            if check.weekday() < 5 and check not in kr_holidays:
+                result.append(check)
+            check -= timedelta(days=1)
+        return result
 
-    def is_trading_day(d):
-        kr_holidays = hol.Korea(years=[d.year])
-        return d.weekday() < 5 and d not in kr_holidays
+    trading_days = get_recent_trading_days(60)
+    day_labels = [f"{d.strftime('%Y-%m-%d')} ({['월','화','수','목','금'][d.weekday()]})" for d in trading_days]
 
-    last_trading = get_last_trading_date()
-
-    col_date, col_hint = st.columns([2, 3])
-    with col_date:
-        selected_date = st.date_input(
-            "시뮬레이션 날짜",
-            value=last_trading,
-            max_value=last_trading,
-            help="장이 열린 날짜만 선택하세요",
-        )
-    with col_hint:
-        st.write("")
-        if not is_trading_day(selected_date):
-            st.warning("선택한 날짜는 장이 열리지 않은 날입니다. 다른 날짜를 선택하세요.")
-            st.stop()
-        else:
-            st.caption(f"✅ {selected_date.strftime('%Y-%m-%d')} ({['월','화','수','목','금','토','일'][selected_date.weekday()]}) 거래일")
-
-    base_date = selected_date
+    selected_label = st.selectbox("시뮬레이션 날짜 (거래일만 표시)", day_labels, index=0)
+    base_date = trading_days[day_labels.index(selected_label)]
     schedule_times = [
         (datetime.combine(base_date, datetime.strptime("09:10", "%H:%M").time()), "09:10 오전"),
         (datetime.combine(base_date, datetime.strptime("12:00", "%H:%M").time()), "12:00 점심"),
