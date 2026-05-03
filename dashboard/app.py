@@ -6,6 +6,7 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from datetime import datetime, timedelta
+from data.utils import get_now_kst, KST
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
@@ -130,9 +131,9 @@ elif page == "매매 이력":
     with tab_kis:
         col_date1, col_date2, col_btn = st.columns([2, 2, 1])
         with col_date1:
-            start_d = st.date_input("시작일", value=datetime.now().date() - timedelta(days=30))
+            start_d = st.date_input("시작일", value=get_now_kst().date() - timedelta(days=30))
         with col_date2:
-            end_d = st.date_input("종료일", value=datetime.now().date())
+            end_d = st.date_input("종료일", value=get_now_kst().date())
         with col_btn:
             st.write("")
             fetch_btn = st.button("조회", use_container_width=True)
@@ -192,7 +193,8 @@ elif page == "매매 이력":
             st.info("아직 에이전트 주문 기록이 없습니다. 에이전트를 실행하면 여기에 기록됩니다.")
         else:
             df = pd.DataFrame(trades)
-            df["ts"] = pd.to_datetime(df["ts"])
+            # 타임존 정보가 있으면 KST로 변환, 없으면 KST로 지정
+            df["ts"] = pd.to_datetime(df["ts"], utc=True).dt.tz_convert(KST)
             df = df.sort_values("ts", ascending=False)
 
             col1, col2, col3 = st.columns(3)
@@ -222,7 +224,14 @@ elif page == "에이전트 로그":
     runs_reversed = list(reversed(runs))
 
     for i, run in enumerate(runs_reversed[:20]):
-        ts = run.get("ts", "")
+        # ISO 형식 문자열을 datetime으로 변환 후 KST로 포맷팅
+        raw_ts = run.get("ts", "")
+        try:
+            dt_ts = pd.to_datetime(raw_ts, utc=True).tz_convert(KST)
+            ts_str = dt_ts.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            ts_str = raw_ts[:16]
+
         watchlist = run.get("watchlist", [])
         summary = run.get("summary", "")
         portfolio = run.get("portfolio", {})
@@ -231,7 +240,7 @@ elif page == "에이전트 로그":
         total_eval = portfolio.get("total_eval", 0)
         holdings_count = len(portfolio.get("holdings", []))
 
-        label = f"🤖 {ts[:16]}  |  분석종목: {', '.join(watchlist)}  |  잔고: ₩{total_eval:,.0f}"
+        label = f"🤖 {ts_str}  |  분석종목: {', '.join(watchlist)}  |  잔고: ₩{total_eval:,.0f}"
         with st.expander(label, expanded=(i == 0)):
             col1, col2, col3 = st.columns(3)
             col1.metric("예수금", f"₩{cash:,.0f}")

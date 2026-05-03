@@ -2,6 +2,7 @@
 import logging
 from datetime import datetime
 from pathlib import Path
+from data.utils import get_now_kst
 import google.generativeai as genai
 from agent.tools import GEMINI_TOOLS, execute_tool, _broker, set_sim_portfolio, get_sim_portfolio
 from data.trade_log import log_agent_run
@@ -38,7 +39,7 @@ class TradingAgent:
         set_sim_portfolio(sim_portfolio_in)
 
         try:
-            now = sim_datetime or datetime.now()
+            now = sim_datetime or get_now_kst()
             today = now.strftime("%Y-%m-%d %H:%M")
             user_message = (
                 f"[{today}] 트레이딩을 시작합니다.\n"

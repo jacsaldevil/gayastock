@@ -8,7 +8,10 @@ import argparse
 import logging
 import os
 import time
-from datetime import date
+from data.utils import get_now_kst
+
+# 로깅 시간대를 KST로 설정
+logging.Formatter.converter = lambda *args: get_now_kst().timetuple()
 
 _log_dir = os.environ.get("LOG_DIR", "logs")
 os.makedirs(_log_dir, exist_ok=True)
@@ -58,7 +61,7 @@ DEFAULT_WATCHLIST = [
 
 def is_trading_day() -> bool:
     import holidays
-    today = date.today()
+    today = get_now_kst().date()
     if today.weekday() >= 5:
         return False
     kr_holidays = holidays.Korea(years=today.year)
@@ -101,15 +104,22 @@ def main():
         run_trading(watchlist)
         return
 
-    # 09:10 장 시작 / 12:00 점심 / 14:30 마감 1시간 전 — 하루 3회
-    import schedule
-    schedule.every().day.at("09:10").do(run_trading, watchlist=watchlist)
-    schedule.every().day.at("12:00").do(run_trading, watchlist=watchlist)
-    schedule.every().day.at("14:30").do(run_trading, watchlist=watchlist)
-
-    logger.info(f"스케줄러 시작 (09:10, 12:00, 14:30 실행) | 관심종목: {len(watchlist)}종목")
+    logger.info(f"스케줄러 시작 (KST 09:10, 12:00, 14:30 실행) | 관심종목: {len(watchlist)}종목")
+    
+    last_run_id = ""
     while True:
-        schedule.run_pending()
+        now_kst = get_now_kst()
+        current_time = now_kst.strftime("%H:%M")
+        current_date = now_kst.strftime("%Y-%m-%d")
+        
+        # 09:10 장 시작 / 12:00 점심 / 14:30 마감 1시간 전 — 하루 3회
+        if current_time in ["09:10", "12:00", "14:30"]:
+            # 같은 날 같은 시간에 중복 실행 방지
+            run_id = f"{current_date} {current_time}"
+            if last_run_id != run_id:
+                run_trading(watchlist)
+                last_run_id = run_id
+        
         time.sleep(30)
 
 

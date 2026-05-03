@@ -8,6 +8,7 @@ import os
 import time
 import requests
 from datetime import datetime, timedelta
+from data.utils import get_now_kst
 from config import KIS_APP_KEY, KIS_APP_SECRET, KIS_ACCOUNT_NO, KIS_BASE_URL, KIS_MOCK
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ class KISBroker:
             return
         try:
             expires_at = datetime.fromisoformat(data["expires_at"])
-            if datetime.now() < expires_at:
+            if get_now_kst() < expires_at:
                 self._access_token = data["access_token"]
                 self._token_expires_at = expires_at
         except Exception:
@@ -92,7 +93,7 @@ class KISBroker:
             pass
 
     def _get_token(self) -> str:
-        if self._access_token and self._token_expires_at and datetime.now() < self._token_expires_at:
+        if self._access_token and self._token_expires_at and get_now_kst() < self._token_expires_at:
             return self._access_token
 
         url = f"{self.base_url}/oauth2/tokenP"
@@ -105,7 +106,7 @@ class KISBroker:
         res.raise_for_status()
         data = res.json()
         self._access_token = data["access_token"]
-        self._token_expires_at = datetime.now() + timedelta(hours=23)
+        self._token_expires_at = get_now_kst() + timedelta(hours=23)
         self._save_token_cache(self._access_token, self._token_expires_at)
         return self._access_token
 
