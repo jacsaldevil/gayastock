@@ -243,7 +243,7 @@ elif page == "에이전트 로그":
 # ══════════════════════════════════════════════════════════
 elif page == "Dry Run 시뮬레이션":
     st.title("🧪 Dry Run 시뮬레이션")
-    st.caption("실제 주문 없이 에이전트의 매매 판단을 시뮬레이션합니다.")
+    st.caption("실제 주문 없이 스케줄러 3회 실행(09:10 / 12:00 / 14:30) 시 에이전트 판단을 시뮬레이션합니다.")
 
     # ── 비밀번호 확인 ──────────────────────────────────────
     pw = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
@@ -253,38 +253,34 @@ elif page == "Dry Run 시뮬레이션":
     if not pw:
         st.stop()
 
-    # ── 시뮬레이션 시각 계산 ───────────────────────────────
-    def get_sim_datetime():
+    # ── 기준 날짜 계산 (마지막 거래일) ───────────────────────
+    def get_last_trading_date():
         import holidays as hol
         now = datetime.now()
         kr_holidays = hol.Korea(years=[now.year, now.year - 1])
         today = now.date()
         is_weekday = today.weekday() < 5
         is_holiday = today in kr_holidays
-        market_open  = now.replace(hour=9,  minute=0,  second=0, microsecond=0)
-        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+        market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
 
-        # 현재 장중이면 실시간 사용
-        if is_weekday and not is_holiday and market_open <= now <= market_close:
-            return now, False
-
-        # 오늘이 거래일이고 장 마감 후면 오늘 14:30으로 시뮬레이션
-        if is_weekday and not is_holiday and now > market_close:
-            return now.replace(hour=14, minute=30, second=0, microsecond=0), True
+        # 오늘이 거래일이고 장이 열렸으면 오늘 사용
+        if is_weekday and not is_holiday and now >= market_open:
+            return today
 
         # 이전 거래일 탐색
         check = today - timedelta(days=1)
         while check.weekday() >= 5 or check in kr_holidays:
             check -= timedelta(days=1)
-        sim_dt = datetime.combine(check, datetime.strptime("14:30", "%H:%M").time())
-        return sim_dt, True
+        return check
 
-    sim_dt, is_simulated = get_sim_datetime()
+    base_date = get_last_trading_date()
+    schedule_times = [
+        (datetime.combine(base_date, datetime.strptime("09:10", "%H:%M").time()), "09:10 오전"),
+        (datetime.combine(base_date, datetime.strptime("12:00", "%H:%M").time()), "12:00 점심"),
+        (datetime.combine(base_date, datetime.strptime("14:30", "%H:%M").time()), "14:30 오후"),
+    ]
 
-    if is_simulated:
-        st.info(f"⏱️ 현재 장 외 시간입니다. **{sim_dt.strftime('%Y-%m-%d %H:%M')}** (마지막 거래일 14:30) 기준으로 시뮬레이션합니다.")
-    else:
-        st.success(f"📡 현재 장중입니다. **{sim_dt.strftime('%Y-%m-%d %H:%M')}** 실시간 기준으로 실행합니다.")
+    st.info(f"📅 시뮬레이션 기준일: **{base_date.strftime('%Y-%m-%d')}** (마지막 거래일) — 실제 주문 없음")
 
     # ── 워치리스트 ─────────────────────────────────────────
     DEFAULT_WATCHLIST = [
@@ -303,23 +299,25 @@ elif page == "Dry Run 시뮬레이션":
     with col_run:
         run_btn = st.button("🚀 시뮬레이션 실행", use_container_width=True, type="primary")
     with col_info:
-        st.caption(f"분석 종목 {len(DEFAULT_WATCHLIST)}개 | 실제 주문 없음 (DRY-RUN)")
+        st.caption(f"분석 종목 {len(DEFAULT_WATCHLIST)}개 | 스케줄 3회(09:10 / 12:00 / 14:30) 순차 실행")
 
     if run_btn:
         os.environ["DRY_RUN"] = "true"
-        result_placeholder = st.empty()
+        results = {}
 
-        with st.spinner("에이전트 분석 중... (수 분 소요될 수 있습니다)"):
-            try:
-                from agent.trader import TradingAgent
-                agent = TradingAgent()
-                result = agent.run(DEFAULT_WATCHLIST, sim_datetime=sim_dt)
-            except Exception as e:
-                result = f"❌ 실행 오류: {e}"
-            finally:
-                os.environ["DRY_RUN"] = "false"
+        try:
+            from agent.trader import TradingAgent
+            tabs = st.tabs([f"⏰ {label}" for _, label in schedule_times])
 
-        st.success("시뮬레이션 완료")
-        st.divider()
-        st.subheader("에이전트 판단 결과")
-        st.markdown(result)
+            for (sim_dt, label), tab in zip(schedule_times, tabs):
+                with tab:
+                    with st.spinner(f"{label} 판단 중..."):
+                        try:
+                            agent = TradingAgent()
+                            result = agent.run(DEFAULT_WATCHLIST, sim_datetime=sim_dt)
+                        except Exception as e:
+                            result = f"❌ 실행 오류: {e}"
+                    st.success(f"{label} 시뮬레이션 완료")
+                    st.markdown(result)
+        finally:
+            os.environ["DRY_RUN"] = "false"
