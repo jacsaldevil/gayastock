@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime
+from data.utils import get_now_kst
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ def _read_all(blob_name: str, filepath: str) -> list[dict]:
 
 def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool):
     _append(_TRADE_BLOB, TRADE_LOG_FILE, {
-        "ts": datetime.now().isoformat(),
+        "ts": get_now_kst().isoformat(),
         "action": action,
         "ticker": ticker,
         "quantity": quantity,
@@ -97,7 +98,7 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
 
 def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict):
     _append(_AGENT_BLOB, AGENT_LOG_FILE, {
-        "ts": datetime.now().isoformat(),
+        "ts": get_now_kst().isoformat(),
         "watchlist": watchlist,
         "summary": summary,
         "portfolio": portfolio_snapshot,
