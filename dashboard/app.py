@@ -320,9 +320,20 @@ elif page == "Dry Run 시뮬레이션":
                         try:
                             agent = TradingAgent()
                             result = agent.run(DEFAULT_WATCHLIST, sim_datetime=sim_dt)
+                            tool_log = agent.tool_call_log
                         except Exception as e:
                             result = f"❌ 실행 오류: {e}"
+                            tool_log = []
+
                     st.success(f"{label} 시뮬레이션 완료")
                     st.markdown(result)
+
+                    if tool_log:
+                        st.divider()
+                        with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)", expanded=False):
+                            for entry in tool_log:
+                                args_str = ", ".join(f"{k}={v}" for k, v in entry["args"].items()) if entry["args"] else ""
+                                st.markdown(f"**[Round {entry['round']}]** `{entry['tool']}({args_str})`")
+                                st.code(entry["result_preview"], language="json")
         finally:
             os.environ["DRY_RUN"] = "false"

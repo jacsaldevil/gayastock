@@ -130,6 +130,40 @@ class KISBroker:
 
     # ── 시세 조회 ──────────────────────────────────────────
 
+    def get_top_volume_stocks(self, n: int = 20) -> list[dict]:
+        """거래량 상위 종목 조회 (TR: FHPST01710000)"""
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/volume-rank"
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_COND_SCR_DIV_CODE": "20171",
+            "FID_INPUT_ISCD": "0000",
+            "FID_DIV_CLS_CODE": "0",
+            "FID_BLNG_CLS_CODE": "0",
+            "FID_TRGT_CLS_CODE": "111111111",
+            "FID_TRGT_EXLS_CLS_CODE": "000000",
+            "FID_INPUT_PRICE_1": "",
+            "FID_INPUT_PRICE_2": "",
+            "FID_VOL_CNT": "",
+            "FID_INPUT_DATE_1": "",
+        }
+        res = requests.get(url, headers=self._headers("FHPST01710000"), params=params, timeout=10)
+        res.raise_for_status()
+        output = res.json().get("output", [])
+        self._smart_sleep()
+        result = []
+        for item in output[:n]:
+            ticker = item.get("mksc_shrn_iscd", "")
+            if not ticker:
+                continue
+            result.append({
+                "ticker": ticker,
+                "name": item.get("hts_kor_isnm", ""),
+                "current_price": _to_int(item.get("stck_prpr")),
+                "volume": _to_int(item.get("acml_vol")),
+                "change_rate": _to_float(item.get("prdy_ctrt")),
+            })
+        return result
+
     def get_current_price(self, ticker: str) -> dict:
         """주식 현재가 + PER/PBR/EPS 조회 (TR: FHKST01010100)"""
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-price"

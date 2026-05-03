@@ -19,6 +19,7 @@ MAX_TOOL_ROUNDS = 30
 
 class TradingAgent:
     def __init__(self):
+        self.tool_call_log: list[dict] = []
         self.model = genai.GenerativeModel(
             model_name=GEMINI_MODEL,
             tools=[GEMINI_TOOLS],
@@ -27,15 +28,17 @@ class TradingAgent:
         )
 
     def run(self, watchlist: list[str], sim_datetime: datetime | None = None) -> str:
+        self.tool_call_log = []
         now = sim_datetime or datetime.now()
         today = now.strftime("%Y-%m-%d %H:%M")
         user_message = (
             f"[{today}] 트레이딩을 시작합니다.\n"
-            f"분석 대상 종목: {', '.join(watchlist)}\n\n"
+            f"기본 분석 종목(워치리스트): {', '.join(watchlist)}\n\n"
             "1. 현재 포트폴리오를 확인하세요.\n"
-            "2. 각 종목의 현재가와 재무제표를 분석하세요.\n"
-            "3. 매수/매도/보유 판단을 내리고 필요시 주문을 실행하세요.\n"
-            "4. 분석 결과와 판단 근거를 요약해 주세요."
+            "2. 워치리스트 종목의 현재가와 재무제표를 분석하세요.\n"
+            "3. 필요시 get_top_volume_stocks로 시장 관심 종목을 추가 발굴하세요 (발굴 종목은 더 엄격한 기준 적용).\n"
+            "4. 매수/매도/보유 판단을 내리고 필요시 주문을 실행하세요.\n"
+            "5. 분석 결과와 판단 근거를 요약해 주세요."
         )
 
         logger.info(f"트레이딩 에이전트 시작: {watchlist}")
@@ -53,7 +56,7 @@ class TradingAgent:
                 if not response.parts:
                     logger.warning("Gemini 응답에 내용이 없습니다 (차단되었을 수 있음)")
                     break
-                
+
                 fn_calls = [p for p in response.parts if hasattr(p, "function_call") and p.function_call.name]
 
                 if not fn_calls:
@@ -62,9 +65,16 @@ class TradingAgent:
                 fn_responses = []
                 for part in fn_calls:
                     fn = part.function_call
-                    logger.info(f"Tool: {fn.name} | {dict(fn.args)}")
-                    result_str = execute_tool(fn.name, dict(fn.args))
+                    args = dict(fn.args)
+                    logger.info(f"Tool: {fn.name} | {args}")
+                    result_str = execute_tool(fn.name, args)
                     logger.info(f"결과: {result_str[:200]}")
+                    self.tool_call_log.append({
+                        "round": i + 1,
+                        "tool": fn.name,
+                        "args": args,
+                        "result_preview": result_str[:400],
+                    })
                     fn_responses.append(
                         genai.protos.Part(
                             function_response=genai.protos.FunctionResponse(

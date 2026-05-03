@@ -98,6 +98,23 @@ GEMINI_TOOLS = genai.protos.Tool(
             ),
         ),
         genai.protos.FunctionDeclaration(
+            name="get_top_volume_stocks",
+            description=(
+                "현재 시장 거래량 상위 종목을 조회합니다. "
+                "고정 워치리스트 외에 오늘 시장에서 주목받는 종목을 발굴할 때 사용하세요. "
+                "반환된 종목은 '발굴 종목'으로 분류하여 더 엄격한 재무 기준을 적용해야 합니다."
+            ),
+            parameters=genai.protos.Schema(
+                type=genai.protos.Type.OBJECT,
+                properties={
+                    "n": genai.protos.Schema(
+                        type=genai.protos.Type.INTEGER,
+                        description="조회할 종목 수 (기본 20)",
+                    ),
+                },
+            ),
+        ),
+        genai.protos.FunctionDeclaration(
             name="get_heikin_ashi_candles",
             description=(
                 "5분봉 하이킨아시 캔들을 조회합니다. "
@@ -157,6 +174,10 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                 tool_input["ticker"],
                 annual=tool_input.get("annual", True),
             )
+
+        elif tool_name == "get_top_volume_stocks":
+            n = int(tool_input.get("n", 20))
+            result = broker.get_top_volume_stocks(n)
 
         elif tool_name == "get_heikin_ashi_candles":
             _validate_ticker(tool_input["ticker"])
