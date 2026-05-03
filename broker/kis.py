@@ -131,7 +131,7 @@ class KISBroker:
     # ── 시세 조회 ──────────────────────────────────────────
 
     def get_top_volume_stocks(self, n: int = 20) -> list[dict]:
-        """거래량 상위 종목 조회 (TR: FHPST01710000)"""
+        """거래량 상위 순수 주식 종목 조회 (ETF/ETN 제외, TR: FHPST01710000)"""
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/volume-rank"
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",
@@ -140,28 +140,32 @@ class KISBroker:
             "FID_DIV_CLS_CODE": "0",
             "FID_BLNG_CLS_CODE": "0",
             "FID_TRGT_CLS_CODE": "111111111",
-            "FID_TRGT_EXLS_CLS_CODE": "000000",
+            "FID_TRGT_EXLS_CLS_CODE": "111111",  # 거래정지/관리/우선주/투자유의/ETF/스팩 제외
             "FID_INPUT_PRICE_1": "",
             "FID_INPUT_PRICE_2": "",
             "FID_VOL_CNT": "",
             "FID_INPUT_DATE_1": "",
         }
+        # 충분히 많이 가져와서 필터 후 n개 확보
         res = requests.get(url, headers=self._headers("FHPST01710000"), params=params, timeout=10)
         res.raise_for_status()
         output = res.json().get("output", [])
         self._smart_sleep()
         result = []
-        for item in output[:n]:
+        for item in output:
             ticker = item.get("mksc_shrn_iscd", "")
-            if not ticker:
+            name = item.get("hts_kor_isnm", "")
+            if not ticker or _is_fund(name):
                 continue
             result.append({
                 "ticker": ticker,
-                "name": item.get("hts_kor_isnm", ""),
+                "name": name,
                 "current_price": _to_int(item.get("stck_prpr")),
                 "volume": _to_int(item.get("acml_vol")),
                 "change_rate": _to_float(item.get("prdy_ctrt")),
             })
+            if len(result) >= n:
+                break
         return result
 
     def get_current_price(self, ticker: str) -> dict:
@@ -439,6 +443,18 @@ class KISBroker:
                 "order_state": item.get("ord_psbl_yn", ""),
             })
         return result
+
+
+# ETF/ETN/펀드 제외용 이름 키워드
+_FUND_KEYWORDS = (
+    "KODEX", "TIGER", "ARIRANG", "KINDEX", "HANARO", "KOSEF",
+    "KBSTAR", "ACE", "SOL", "WOORI", "SMART", "FOCUS", "TIMEFOLIO",
+    "ETF", "ETN", "레버리지", "인버스", "선물", "리츠", "REIT",
+)
+
+def _is_fund(name: str) -> bool:
+    upper = name.upper()
+    return any(kw.upper() in upper for kw in _FUND_KEYWORDS)
 
 
 def _aggregate_5min(candles_1m: list[dict]) -> list[dict]:
