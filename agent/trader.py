@@ -26,8 +26,9 @@ class TradingAgent:
             generation_config=genai.GenerationConfig(temperature=0.1),
         )
 
-    def run(self, watchlist: list[str]) -> str:
-        today = datetime.now().strftime("%Y-%m-%d %H:%M")
+    def run(self, watchlist: list[str], sim_datetime: datetime | None = None) -> str:
+        now = sim_datetime or datetime.now()
+        today = now.strftime("%Y-%m-%d %H:%M")
         user_message = (
             f"[{today}] 트레이딩을 시작합니다.\n"
             f"분석 대상 종목: {', '.join(watchlist)}\n\n"
