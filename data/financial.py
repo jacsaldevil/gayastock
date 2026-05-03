@@ -36,15 +36,33 @@ def get_financial_summary(ticker: str, annual: bool = True) -> dict:
     latest_balance = balance[0]
     latest_ratio = ratio[0] if ratio else {}
 
-    # 영업이익률: ratio API 우선, 0이면 income statement에서 직접 계산
+    data_quality: dict = {}  # 빈 dict = 모든 데이터 정상, 항목 있으면 해당 지표 문제
+
+    # 영업이익률: ratio API → income statement 직접 계산 순서로 fallback
     operating_margin = latest_ratio.get("operating_margin_pct", 0)
     if not operating_margin:
         operating_margin = latest_income.get("operating_margin_pct", 0)
+    if not operating_margin:
+        data_quality["operating_margin"] = "unavailable"
 
     # ROE: ratio API 우선, 0이면 직접 계산 (순이익/자본)
     roe = latest_ratio.get("roe_pct", 0)
     if not roe and latest_balance["total_equity"]:
         roe = round(latest_income["net_profit"] / latest_balance["total_equity"] * 100, 2)
+    if not roe:
+        data_quality["roe"] = "unavailable"
+
+    # 부채비율: balance sheet 직접 값 → 자산-자본으로 implied 계산 순서로 fallback
+    debt_ratio = latest_balance["debt_ratio_pct"]
+    if not debt_ratio:
+        assets = latest_balance.get("total_assets", 0)
+        equity = latest_balance.get("total_equity", 0)
+        if assets > 0 and equity > 0:
+            implied_debt = assets - equity
+            debt_ratio = round(implied_debt / equity * 100, 2)
+            data_quality["debt_ratio"] = "implied"  # 추정값
+        else:
+            data_quality["debt_ratio"] = "unavailable"
 
     # 전년 대비 매출 성장률
     yoy_revenue_growth = None
@@ -63,7 +81,7 @@ def get_financial_summary(ticker: str, annual: bool = True) -> dict:
         "total_assets": latest_balance["total_assets"],
         "total_equity": latest_balance["total_equity"],
         "total_debt": latest_balance["total_debt"],
-        "debt_ratio_pct": latest_balance["debt_ratio_pct"],
+        "debt_ratio_pct": debt_ratio,
         "roe_pct": roe,
         "operating_margin_pct": operating_margin,
         "net_margin_pct": latest_ratio.get("net_margin_pct", 0),
@@ -72,4 +90,5 @@ def get_financial_summary(ticker: str, annual: bool = True) -> dict:
         "yoy_revenue_growth_pct": yoy_revenue_growth,
         "income_history": income[:3],
         "balance_history": balance[:3],
+        "data_quality": data_quality,
     }

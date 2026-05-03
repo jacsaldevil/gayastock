@@ -100,7 +100,11 @@ class TradingAgent:
                     log_agent_run(watchlist, error_msg, {})
                     return error_msg
 
-            final = response.text if hasattr(response, "text") and response.text else "분석 완료 (텍스트 응답 없음)"
+            try:
+                final = response.text or "분석 완료 (텍스트 응답 없음)"
+            except Exception:
+                # 마지막 응답이 function_call 파트인 경우 (MAX_TOOL_ROUNDS 도달)
+                final = "분석 완료 (도구 호출 한도 도달 — 최종 텍스트 응답 없음)"
             logger.info("에이전트 완료")
 
             try:
