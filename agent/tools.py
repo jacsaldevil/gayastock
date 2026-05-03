@@ -98,6 +98,25 @@ GEMINI_TOOLS = genai.protos.Tool(
             ),
         ),
         genai.protos.FunctionDeclaration(
+            name="get_heikin_ashi_candles",
+            description=(
+                "5분봉 하이킨아시 캔들을 조회합니다. "
+                "각 캔들에 ha_open/ha_high/ha_low/ha_close, bullish 여부, "
+                "upper_wick/lower_wick 크기, 패턴 설명(강한상승/상승저항/강한하락/하락저지)이 포함됩니다. "
+                "매수 전 진입 타이밍 판단에 활용하세요."
+            ),
+            parameters=genai.protos.Schema(
+                type=genai.protos.Type.OBJECT,
+                properties={
+                    "ticker": genai.protos.Schema(
+                        type=genai.protos.Type.STRING,
+                        description="6자리 종목코드",
+                    ),
+                },
+                required=["ticker"],
+            ),
+        ),
+        genai.protos.FunctionDeclaration(
             name="sell_stock",
             description="보유 종목을 시장가로 매도합니다.",
             parameters=genai.protos.Schema(
@@ -138,6 +157,10 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                 tool_input["ticker"],
                 annual=tool_input.get("annual", True),
             )
+
+        elif tool_name == "get_heikin_ashi_candles":
+            _validate_ticker(tool_input["ticker"])
+            result = broker.get_minute_candles(tool_input["ticker"])
 
         elif tool_name == "get_portfolio":
             result = broker.get_balance()

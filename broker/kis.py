@@ -324,6 +324,39 @@ class KISBroker:
             "message": data.get("msg1", ""),
         }
 
+    # ── 분봉 / 하이킨아시 ────────────────────────────────────
+
+    def get_minute_candles(self, ticker: str, fetch_count: int = 30) -> list[dict]:
+        """1분봉 조회 후 5분봉 집계 + 하이킨아시 계산 반환 (TR: FHKST03010200)"""
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+        now = datetime.now().strftime("%H%M%S")
+        params = {
+            "FID_ETC_CLS_CODE": "",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": ticker,
+            "FID_INPUT_HOUR_1": now,
+            "FID_PW_DATA_INCU_YN": "Y",
+        }
+        res = requests.get(url, headers=self._headers("FHKST03010200"), params=params, timeout=10)
+        res.raise_for_status()
+        output = res.json().get("output2", [])
+        self._smart_sleep()
+
+        # 오래된 순으로 정렬 (API는 최신 순 반환)
+        candles_1m = []
+        for r in reversed(output[:fetch_count]):
+            candles_1m.append({
+                "time": r.get("stck_cntg_hour", ""),
+                "open": _to_int(r.get("stck_oprc")),
+                "high": _to_int(r.get("stck_hgpr")),
+                "low": _to_int(r.get("stck_lwpr")),
+                "close": _to_int(r.get("stck_prpr")),
+                "volume": _to_int(r.get("cntg_vol")),
+            })
+
+        candles_5m = _aggregate_5min(candles_1m)
+        return _compute_heikin_ashi(candles_5m)
+
     # ── 체결 이력 ─────────────────────────────────────────
 
     def get_order_history(self, start_date: str, end_date: str) -> list[dict]:
@@ -372,6 +405,62 @@ class KISBroker:
                 "order_state": item.get("ord_psbl_yn", ""),
             })
         return result
+
+
+def _aggregate_5min(candles_1m: list[dict]) -> list[dict]:
+    """1분봉 리스트를 5분봉으로 집계"""
+    result = []
+    n = len(candles_1m)
+    trimmed = candles_1m[n % 5:]  # 앞 자투리 제거, 5의 배수로 맞춤
+    for i in range(0, len(trimmed), 5):
+        group = trimmed[i:i + 5]
+        if not group:
+            continue
+        result.append({
+            "time": group[0]["time"],
+            "open": group[0]["open"],
+            "high": max(c["high"] for c in group),
+            "low": min(c["low"] for c in group),
+            "close": group[-1]["close"],
+            "volume": sum(c["volume"] for c in group),
+        })
+    return result
+
+
+def _compute_heikin_ashi(candles: list[dict]) -> list[dict]:
+    """OHLC 캔들 리스트로 하이킨아시 계산"""
+    ha = []
+    for i, c in enumerate(candles):
+        ha_close = (c["open"] + c["high"] + c["low"] + c["close"]) / 4
+        if i == 0:
+            ha_open = (c["open"] + c["close"]) / 2
+        else:
+            ha_open = (ha[i - 1]["ha_open"] + ha[i - 1]["ha_close"]) / 2
+        ha_high = max(c["high"], ha_open, ha_close)
+        ha_low = min(c["low"], ha_open, ha_close)
+        body = ha_close - ha_open
+        upper_wick = ha_high - max(ha_open, ha_close)
+        lower_wick = min(ha_open, ha_close) - ha_low
+        bullish = body > 0
+
+        if bullish:
+            pattern = "강한상승" if upper_wick < abs(body) * 0.15 else "상승저항(윗꼬리)"
+        else:
+            pattern = "강한하락" if lower_wick < abs(body) * 0.15 else "하락저지(아랫꼬리)"
+
+        ha.append({
+            "time": c["time"],
+            "ha_open": round(ha_open),
+            "ha_high": round(ha_high),
+            "ha_low": round(ha_low),
+            "ha_close": round(ha_close),
+            "volume": c["volume"],
+            "bullish": bullish,
+            "upper_wick": round(upper_wick),
+            "lower_wick": round(lower_wick),
+            "pattern": pattern,
+        })
+    return ha
 
 
 def _to_int(val) -> int:
