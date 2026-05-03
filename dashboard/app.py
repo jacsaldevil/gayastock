@@ -1,9 +1,10 @@
 """gayastock 대시보드 — streamlit run dashboard/app.py"""
 import sys
 import os
+import json
+import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import json
 from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
@@ -253,19 +254,71 @@ elif page == "Dry Run 시뮬레이션":
     if not pw:
         st.stop()
 
-    # ── 기준 날짜 선택 (거래일만 표시) ──────────────────────────
+    # ── GCS 기반 결과 저장/로드 ────────────────────────────
+    _GCS_DATA_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
+    _SIM_BLOB = "simulations/dry_run_latest.json"
+
+    def _save_sim_to_gcs(data: dict):
+        if not _GCS_DATA_BUCKET:
+            return
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SIM_BLOB)
+            blob.upload_from_string(json.dumps(data, ensure_ascii=False), content_type="application/json")
+        except Exception:
+            pass
+
+    def _load_sim_from_gcs() -> dict:
+        if not _GCS_DATA_BUCKET:
+            return {}
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SIM_BLOB)
+            if blob.exists():
+                return json.loads(blob.download_as_text())
+        except Exception:
+            pass
+        return {}
+
+    def _run_simulation_bg(schedule_times, watchlist, base_date_str):
+        """백그라운드 스레드에서 시뮬레이션 실행 후 GCS에 저장"""
+        os.environ["DRY_RUN"] = "true"
+        data = {
+            "status": "running",
+            "base_date": base_date_str,
+            "started_at": datetime.now().isoformat(),
+            "results": {},
+        }
+        _save_sim_to_gcs(data)
+        try:
+            from agent.trader import TradingAgent
+            for sim_dt, label in schedule_times:
+                try:
+                    agent = TradingAgent()
+                    result = agent.run(watchlist, sim_datetime=sim_dt)
+                    tool_log = agent.tool_call_log
+                except Exception as e:
+                    result = f"❌ 실행 오류: {e}"
+                    tool_log = []
+                data["results"][label] = {"result": result, "tool_log": tool_log}
+                data["status"] = "running"
+                _save_sim_to_gcs(data)
+        finally:
+            os.environ["DRY_RUN"] = "false"
+            data["status"] = "done"
+            data["finished_at"] = datetime.now().isoformat()
+            _save_sim_to_gcs(data)
+
+    # ── 기준 날짜 선택 (거래일만 표시) ────────────────────
     import holidays as hol
-    from datetime import date as date_type
 
     def get_recent_trading_days(n=60):
-        """최근 n개 거래일 목록 반환 (최신 순)"""
         now = datetime.now()
         kr_holidays = hol.Korea(years=[now.year, now.year - 1])
         today = now.date()
         market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
         result = []
         check = today
-        # 오늘 장이 아직 안 열렸으면 어제부터 탐색
         if today.weekday() >= 5 or today in kr_holidays or now < market_open:
             check -= timedelta(days=1)
         while len(result) < n:
@@ -276,7 +329,6 @@ elif page == "Dry Run 시뮬레이션":
 
     trading_days = get_recent_trading_days(60)
     day_labels = [f"{d.strftime('%Y-%m-%d')} ({['월','화','수','목','금'][d.weekday()]})" for d in trading_days]
-
     selected_label = st.selectbox("시뮬레이션 날짜 (거래일만 표시)", day_labels, index=0)
     base_date = trading_days[day_labels.index(selected_label)]
     schedule_times = [
@@ -285,9 +337,6 @@ elif page == "Dry Run 시뮬레이션":
         (datetime.combine(base_date, datetime.strptime("14:30", "%H:%M").time()), "14:30 오후"),
     ]
 
-    st.info(f"📅 기준일 **{base_date.strftime('%Y-%m-%d')}** | 현재 포트폴리오 + 현재 가격 기준 — 실제 주문 없음")
-
-    # ── 워치리스트 ─────────────────────────────────────────
     DEFAULT_WATCHLIST = [
         "005930", "000660", "066570",
         "035420", "035720",
@@ -299,41 +348,88 @@ elif page == "Dry Run 시뮬레이션":
         "017670", "028260",
     ]
 
+    st.info(f"📅 기준일 **{base_date.strftime('%Y-%m-%d')}** | 현재 포트폴리오 + 현재 가격 기준 — 실제 주문 없음")
     st.divider()
-    col_run, col_info = st.columns([1, 3])
+
+    # ── 실행 버튼 + 결과 확인 버튼 ────────────────────────
+    col_run, col_refresh, col_info = st.columns([1, 1, 2])
     with col_run:
         run_btn = st.button("🚀 시뮬레이션 실행", use_container_width=True, type="primary")
+    with col_refresh:
+        refresh_btn = st.button("🔄 결과 확인", use_container_width=True)
     with col_info:
-        st.caption(f"분석 종목 {len(DEFAULT_WATCHLIST)}개 | 스케줄 3회(09:10 / 12:00 / 14:30) 순차 실행")
+        st.caption("앱 전환 후 돌아와도 '결과 확인'으로 진행 상황을 볼 수 있습니다")
 
+    # ── GCS 없는 환경 (로컬) 폴백: 세션 내 동기 실행 ──────
+    if not _GCS_DATA_BUCKET:
+        if run_btn:
+            os.environ["DRY_RUN"] = "true"
+            try:
+                from agent.trader import TradingAgent
+                tabs = st.tabs([f"⏰ {label}" for _, label in schedule_times])
+                for (sim_dt, label), tab in zip(schedule_times, tabs):
+                    with tab:
+                        with st.spinner(f"{label} 판단 중..."):
+                            try:
+                                agent = TradingAgent()
+                                result = agent.run(DEFAULT_WATCHLIST, sim_datetime=sim_dt)
+                                tool_log = agent.tool_call_log
+                            except Exception as e:
+                                result = f"❌ 실행 오류: {e}"
+                                tool_log = []
+                        st.success(f"{label} 완료")
+                        st.markdown(result)
+                        if tool_log:
+                            with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)", expanded=False):
+                                for entry in tool_log:
+                                    args_str = ", ".join(f"{k}={v}" for k, v in entry["args"].items()) if entry["args"] else ""
+                                    st.markdown(f"**[Round {entry['round']}]** `{entry['tool']}({args_str})`")
+                                    st.code(entry["result_preview"], language="json")
+            finally:
+                os.environ["DRY_RUN"] = "false"
+        st.stop()
+
+    # ── GCS 환경: 백그라운드 실행 ─────────────────────────
     if run_btn:
-        os.environ["DRY_RUN"] = "true"
-        results = {}
+        t = threading.Thread(
+            target=_run_simulation_bg,
+            args=(schedule_times, DEFAULT_WATCHLIST, base_date.strftime("%Y-%m-%d")),
+            daemon=True,
+        )
+        t.start()
+        st.success("✅ 시뮬레이션이 백그라운드에서 시작되었습니다. 다른 앱을 사용하다 돌아와서 '결과 확인'을 누르세요.")
 
-        try:
-            from agent.trader import TradingAgent
-            tabs = st.tabs([f"⏰ {label}" for _, label in schedule_times])
+    # ── 결과 표시 ─────────────────────────────────────────
+    sim_data = _load_sim_from_gcs()
+    if not sim_data:
+        st.info("아직 실행된 시뮬레이션 결과가 없습니다.")
+        st.stop()
 
-            for (sim_dt, label), tab in zip(schedule_times, tabs):
-                with tab:
-                    with st.spinner(f"{label} 판단 중..."):
-                        try:
-                            agent = TradingAgent()
-                            result = agent.run(DEFAULT_WATCHLIST, sim_datetime=sim_dt)
-                            tool_log = agent.tool_call_log
-                        except Exception as e:
-                            result = f"❌ 실행 오류: {e}"
-                            tool_log = []
+    status = sim_data.get("status", "")
+    sim_base = sim_data.get("base_date", "")
+    started_at = sim_data.get("started_at", "")[:16].replace("T", " ")
+    finished_at = sim_data.get("finished_at", "")
+    results = sim_data.get("results", {})
 
-                    st.success(f"{label} 시뮬레이션 완료")
-                    st.markdown(result)
+    if status == "running":
+        completed = len(results)
+        st.warning(f"⏳ 실행 중... ({completed}/3 완료) — 시작: {started_at}")
+        if results:
+            st.caption("완료된 결과 미리보기:")
+    elif status == "done":
+        finished_str = finished_at[:16].replace("T", " ") if finished_at else ""
+        st.success(f"✅ 완료 — 기준일: {sim_base} | 종료: {finished_str}")
 
-                    if tool_log:
-                        st.divider()
-                        with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)", expanded=False):
-                            for entry in tool_log:
-                                args_str = ", ".join(f"{k}={v}" for k, v in entry["args"].items()) if entry["args"] else ""
-                                st.markdown(f"**[Round {entry['round']}]** `{entry['tool']}({args_str})`")
-                                st.code(entry["result_preview"], language="json")
-        finally:
-            os.environ["DRY_RUN"] = "false"
+    if results:
+        tabs = st.tabs([f"⏰ {label}" for label in results])
+        for tab, (label, entry) in zip(tabs, results.items()):
+            with tab:
+                st.markdown(entry.get("result", "결과 없음"))
+                tool_log = entry.get("tool_log", [])
+                if tool_log:
+                    st.divider()
+                    with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)", expanded=False):
+                        for e in tool_log:
+                            args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
+                            st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
+                            st.code(e["result_preview"], language="json")
