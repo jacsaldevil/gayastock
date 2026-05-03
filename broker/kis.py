@@ -386,7 +386,7 @@ class KISBroker:
     def get_minute_candles(self, ticker: str, fetch_count: int = 30) -> list[dict]:
         """1분봉 조회 후 5분봉 집계 + 하이킨아시 계산 반환 (TR: FHKST03010200)"""
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
-        now = datetime.now().strftime("%H%M%S")
+        now = get_now_kst().strftime("%H%M%S")
         params = {
             "FID_ETC_CLS_CODE": "",
             "FID_COND_MRKT_DIV_CODE": "J",
