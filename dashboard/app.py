@@ -393,34 +393,88 @@ elif page == "Dry Run 시뮬레이션":
         "017670", "028260",
     ]
 
-    # ══ 섹션 1: 이전 결과 목록 ════════════════════════════
-    st.subheader("📋 이전 시뮬레이션 결과")
+    # ── 모바일 테이블 CSS ──────────────────────────────────
+    st.markdown("""
+<style>
+[data-testid="stMarkdownContainer"] table {
+    font-size: 11.5px;
+    border-collapse: collapse;
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+}
+[data-testid="stMarkdownContainer"] th,
+[data-testid="stMarkdownContainer"] td {
+    padding: 2px 6px !important;
+    white-space: nowrap;
+}
+[data-testid="stMarkdownContainer"] th {
+    background-color: rgba(255,255,255,0.07);
+}
+</style>
+""", unsafe_allow_html=True)
+
+    def _show_sim_results(sim_data: dict):
+        status = sim_data.get("status", "")
+        finished_disp = (sim_data.get("finished_at") or "")[:16].replace("T", " ")
+        results = sim_data.get("results", {})
+        if status == "running":
+            st.warning(f"⏳ 실행 중... ({len(results)}/3 완료) — 새로고침으로 업데이트")
+        elif status == "done":
+            st.success(f"✅ 완료 — {finished_disp}")
+        if not results:
+            return
+        tabs = st.tabs([f"⏰ {label}" for label in results])
+        for tab, (label, entry) in zip(tabs, results.items()):
+            with tab:
+                st.markdown(entry.get("result", "결과 없음"))
+                tool_log = entry.get("tool_log", [])
+                if tool_log:
+                    with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)"):
+                        for e in tool_log:
+                            args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
+                            st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
+                            st.code(e["result_preview"], language="json")
+
+    # ══ 섹션 1: 결과 목록 + 인라인 상세 ════════════════════
+    st.subheader("📋 시뮬레이션 결과 목록")
     sim_index = _load_sim_index()
+    selected_id = st.session_state.get("selected_sim_id")
 
     if not sim_index:
         st.info("아직 실행된 시뮬레이션이 없습니다.")
     else:
-        hdr = st.columns([2.5, 2, 1.5, 0.8, 0.8])
-        hdr[0].markdown("**실행일시**")
-        hdr[1].markdown("**기준일**")
-        hdr[2].markdown("**상태**")
         for i, entry in enumerate(sim_index):
             eid = entry["id"]
             created = (entry.get("created_at") or "")[:16].replace("T", " ")
             base_d = entry.get("base_date", "")
-            status_icon = "✅ 완료" if entry.get("status") == "done" else "⏳ 실행중"
-            cols = st.columns([2.5, 2, 1.5, 0.8, 0.8])
-            cols[0].write(created)
-            cols[1].write(base_d)
-            cols[2].write(status_icon)
-            if cols[3].button("보기", key=f"v_{eid}_{i}", use_container_width=True):
-                st.session_state["selected_sim_id"] = eid
+            status_icon = "✅" if entry.get("status") == "done" else "⏳"
+            is_open = selected_id == eid
+            toggle_label = "▲" if is_open else "▼"
+
+            cols = st.columns([2.3, 1.8, 0.45, 0.45])
+            cols[0].markdown(f"{status_icon} **{created}**")
+            cols[1].caption(f"기준일: {base_d}")
+            if cols[2].button(toggle_label, key=f"v_{eid}_{i}", use_container_width=True):
+                if is_open:
+                    st.session_state.pop("selected_sim_id", None)
+                else:
+                    st.session_state["selected_sim_id"] = eid
                 st.rerun()
-            if cols[4].button("🗑️", key=f"d_{eid}_{i}", use_container_width=True):
+            if cols[3].button("🗑", key=f"d_{eid}_{i}", use_container_width=True):
                 _delete_sim(eid)
-                if st.session_state.get("selected_sim_id") == eid:
+                if is_open:
                     st.session_state.pop("selected_sim_id", None)
                 st.rerun()
+
+            if is_open:
+                sim_data = _load_sim_data(eid)
+                if sim_data:
+                    _show_sim_results(sim_data)
+                else:
+                    st.warning("데이터를 찾을 수 없습니다.")
+                st.divider()
 
     st.divider()
 
@@ -464,8 +518,8 @@ elif page == "Dry Run 시뮬레이션":
                 args=(sim_id, schedule_times, DEFAULT_WATCHLIST, base_date_str),
                 daemon=True,
             ).start()
-            st.success("✅ 시뮬레이션 시작! '결과 확인'을 눌러 진행 상황을 확인하세요.")
             st.session_state["selected_sim_id"] = sim_id
+            st.rerun()
 
     else:
         # 로컬 모드: 동기 실행 + 가상 포트폴리오 체인
@@ -512,44 +566,3 @@ elif page == "Dry Run 시뮬레이션":
             _save_sim_index(idx_list)
             st.session_state["selected_sim_id"] = sim_id
             st.rerun()
-
-    # ══ 섹션 3: 선택된 시뮬레이션 결과 ══════════════════
-    selected_id = st.session_state.get("selected_sim_id")
-    if not selected_id:
-        st.stop()
-
-    st.divider()
-    sim_data = _load_sim_data(selected_id)
-    if not sim_data:
-        st.warning("선택한 시뮬레이션 데이터를 찾을 수 없습니다.")
-        st.stop()
-
-    status = sim_data.get("status", "")
-    sim_base = sim_data.get("base_date", "")
-    created_disp = (sim_data.get("created_at") or "")[:16].replace("T", " ")
-    finished_disp = (sim_data.get("finished_at") or "")[:16].replace("T", " ")
-    results = sim_data.get("results", {})
-
-    st.subheader(f"📊 결과 상세 — 기준일 {sim_base}  (실행: {created_disp})")
-
-    if status == "running":
-        completed = len(results)
-        st.warning(f"⏳ 실행 중... ({completed}/3 완료)")
-        if not results:
-            st.stop()
-    elif status == "done":
-        st.success(f"✅ 완료 — 종료: {finished_disp}")
-
-    if results:
-        tabs = st.tabs([f"⏰ {label}" for label in results])
-        for tab, (label, entry) in zip(tabs, results.items()):
-            with tab:
-                st.markdown(entry.get("result", "결과 없음"))
-                tool_log = entry.get("tool_log", [])
-                if tool_log:
-                    st.divider()
-                    with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)", expanded=False):
-                        for e in tool_log:
-                            args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
-                            st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
-                            st.code(e["result_preview"], language="json")
