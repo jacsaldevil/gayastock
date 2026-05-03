@@ -253,34 +253,51 @@ elif page == "Dry Run 시뮬레이션":
     if not pw:
         st.stop()
 
-    # ── 기준 날짜 계산 (마지막 거래일) ───────────────────────
+    # ── 기준 날짜 선택 ────────────────────────────────────────
+    import holidays as hol
+
     def get_last_trading_date():
-        import holidays as hol
         now = datetime.now()
         kr_holidays = hol.Korea(years=[now.year, now.year - 1])
         today = now.date()
-        is_weekday = today.weekday() < 5
-        is_holiday = today in kr_holidays
         market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-
-        # 오늘이 거래일이고 장이 열렸으면 오늘 사용
-        if is_weekday and not is_holiday and now >= market_open:
+        if today.weekday() < 5 and today not in kr_holidays and now >= market_open:
             return today
-
-        # 이전 거래일 탐색
         check = today - timedelta(days=1)
         while check.weekday() >= 5 or check in kr_holidays:
             check -= timedelta(days=1)
         return check
 
-    base_date = get_last_trading_date()
+    def is_trading_day(d):
+        kr_holidays = hol.Korea(years=[d.year])
+        return d.weekday() < 5 and d not in kr_holidays
+
+    last_trading = get_last_trading_date()
+
+    col_date, col_hint = st.columns([2, 3])
+    with col_date:
+        selected_date = st.date_input(
+            "시뮬레이션 날짜",
+            value=last_trading,
+            max_value=last_trading,
+            help="장이 열린 날짜만 선택하세요",
+        )
+    with col_hint:
+        st.write("")
+        if not is_trading_day(selected_date):
+            st.warning("선택한 날짜는 장이 열리지 않은 날입니다. 다른 날짜를 선택하세요.")
+            st.stop()
+        else:
+            st.caption(f"✅ {selected_date.strftime('%Y-%m-%d')} ({['월','화','수','목','금','토','일'][selected_date.weekday()]}) 거래일")
+
+    base_date = selected_date
     schedule_times = [
         (datetime.combine(base_date, datetime.strptime("09:10", "%H:%M").time()), "09:10 오전"),
         (datetime.combine(base_date, datetime.strptime("12:00", "%H:%M").time()), "12:00 점심"),
         (datetime.combine(base_date, datetime.strptime("14:30", "%H:%M").time()), "14:30 오후"),
     ]
 
-    st.info(f"📅 시뮬레이션 기준일: **{base_date.strftime('%Y-%m-%d')}** (마지막 거래일) — 실제 주문 없음")
+    st.info(f"📅 기준일 **{base_date.strftime('%Y-%m-%d')}** | 현재 포트폴리오 + 현재 가격 기준 — 실제 주문 없음")
 
     # ── 워치리스트 ─────────────────────────────────────────
     DEFAULT_WATCHLIST = [

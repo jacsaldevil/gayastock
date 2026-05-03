@@ -5,7 +5,7 @@ load_dotenv()
 
 # Google AI Studio
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-preview-04-17")
 
 # KIS API
 KIS_APP_KEY = os.getenv("KIS_APP_KEY", "")
