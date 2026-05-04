@@ -143,6 +143,26 @@ if page == "포트폴리오":
             fig2.update_layout(yaxis_title="수익률 (%)", margin=dict(t=20, b=20, l=20, r=20), height=300)
             st.plotly_chart(fig2, use_container_width=True)
 
+    # ── 미체결 주문 ────────────────────────────────────────
+    st.divider()
+    st.subheader("⏳ 미체결 주문")
+    try:
+        pending = KISBroker().get_pending_orders()
+    except Exception as e:
+        pending = None
+        st.warning(f"미체결 조회 실패: {e}")
+
+    if pending is not None:
+        if not pending:
+            st.info("미체결 주문 없음")
+        else:
+            pdf = pd.DataFrame(pending)
+            pdf["구분"] = pdf["action"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
+            pdf["주문가"] = pdf["order_price"].apply(lambda x: f"₩{x:,}" if x else "시장가")
+            display_pdf = pdf[["구분", "ticker", "name", "order_qty", "filled_qty", "remaining_qty", "주문가", "order_type"]].copy()
+            display_pdf.columns = ["구분", "종목코드", "종목명", "주문수량", "체결수량", "미체결수량", "주문가", "주문유형"]
+            st.dataframe(display_pdf, use_container_width=True, hide_index=True)
+
 # ══════════════════════════════════════════════════════════
 elif page == "매매 이력":
     st.title("매매 이력")

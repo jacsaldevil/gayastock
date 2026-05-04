@@ -416,6 +416,42 @@ class KISBroker:
 
     # ── 체결 이력 ─────────────────────────────────────────
 
+    def get_pending_orders(self) -> list[dict]:
+        """미체결 주문 조회 (TTTC8036R 실전 / VTTC8036R 모의)"""
+        tr_id = "VTTC8036R" if KIS_MOCK else "TTTC8036R"
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+        params = {
+            "CANO": self.acc_no,
+            "ACNT_PRDT_CD": self.acc_suffix,
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+            "INQR_DVSN_1": "0",
+            "INQR_DVSN_2": "0",
+        }
+        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res.raise_for_status()
+        output = res.json().get("output", [])
+        self._smart_sleep()
+        result = []
+        for item in output:
+            qty = int(item.get("ord_qty", 0) or 0)
+            filled = int(item.get("tot_ccld_qty", 0) or 0)
+            remaining = qty - filled
+            if remaining <= 0:
+                continue
+            result.append({
+                "order_no": item.get("odno", ""),
+                "ticker": item.get("pdno", ""),
+                "name": item.get("prdt_name", ""),
+                "action": "BUY" if item.get("sll_buy_dvsn_cd") == "02" else "SELL",
+                "order_qty": qty,
+                "filled_qty": filled,
+                "remaining_qty": remaining,
+                "order_price": _to_int(item.get("ord_unpr")),
+                "order_type": item.get("ord_dvsn_name", ""),
+            })
+        return result
+
     def get_order_history(self, start_date: str, end_date: str) -> list[dict]:
         """일별 주문체결 조회 (TTTC8001R 실전 / VTTC8001R 모의)
         start_date / end_date: 'YYYYMMDD' 형식
