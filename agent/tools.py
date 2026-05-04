@@ -169,8 +169,8 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             if _is_dry_run():
                 global _sim_portfolio
                 if _sim_portfolio is None:
-                    # 첫 호출 시 실제 잔고로 가상 포트폴리오 초기화
-                    _sim_portfolio = broker.get_balance()
+                    # 시뮬레이션 초기 자본 고정 (실제 모의계좌 잔고 무관)
+                    _sim_portfolio = {"cash": 1_000_000, "holdings": [], "total_eval": 1_000_000, "profit_loss": 0}
                 result = _sim_portfolio
             else:
                 result = broker.get_balance()
