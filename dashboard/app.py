@@ -20,6 +20,28 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── 전역 모바일 테이블 CSS ────────────────────────────────
+st.markdown("""
+<style>
+[data-testid="stMarkdownContainer"] table {
+    font-size: 11.5px;
+    border-collapse: collapse;
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+}
+[data-testid="stMarkdownContainer"] th,
+[data-testid="stMarkdownContainer"] td {
+    padding: 2px 6px !important;
+    white-space: nowrap;
+}
+[data-testid="stMarkdownContainer"] th {
+    background-color: rgba(255,255,255,0.07);
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ── 사이드바 ──────────────────────────────────────────────
 st.sidebar.title("📈 gayastock")
 st.sidebar.caption("AI 주식 트레이딩 에이전트")
@@ -383,28 +405,6 @@ elif page == "에이전트 실행":
             _write(data)
             _mark_done_in_index(data["finished_at"])
 
-    # ── 모바일 테이블 CSS ──────────────────────────────────
-    st.markdown("""
-<style>
-[data-testid="stMarkdownContainer"] table {
-    font-size: 11.5px;
-    border-collapse: collapse;
-    display: block;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    max-width: 100%;
-}
-[data-testid="stMarkdownContainer"] th,
-[data-testid="stMarkdownContainer"] td {
-    padding: 2px 6px !important;
-    white-space: nowrap;
-}
-[data-testid="stMarkdownContainer"] th {
-    background-color: rgba(255,255,255,0.07);
-}
-</style>
-""", unsafe_allow_html=True)
-
     def _show_sim_results(sim_data: dict):
         status = sim_data.get("status", "")
         finished_disp = (sim_data.get("finished_at") or "")[:16].replace("T", " ")
@@ -656,28 +656,6 @@ elif page == "에이전트 실행":
             data["finished_at"] = get_now_kst().isoformat()
             _write(data)
             _mark_done_in_index(data["finished_at"])
-
-    # ── 모바일 테이블 CSS ──────────────────────────────────
-    st.markdown("""
-<style>
-[data-testid="stMarkdownContainer"] table {
-    font-size: 11.5px;
-    border-collapse: collapse;
-    display: block;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    max-width: 100%;
-}
-[data-testid="stMarkdownContainer"] th,
-[data-testid="stMarkdownContainer"] td {
-    padding: 2px 6px !important;
-    white-space: nowrap;
-}
-[data-testid="stMarkdownContainer"] th {
-    background-color: rgba(255,255,255,0.07);
-}
-</style>
-""", unsafe_allow_html=True)
 
     def _show_sim_results(sim_data: dict):
         status = sim_data.get("status", "")
