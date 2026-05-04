@@ -441,6 +441,7 @@ class KISBroker:
                 continue
             result.append({
                 "order_no": item.get("odno", ""),
+                "krx_fwdg_ord_orgno": item.get("krx_fwdg_ord_orgno", ""),
                 "ticker": item.get("pdno", ""),
                 "name": item.get("prdt_name", ""),
                 "action": "BUY" if item.get("sll_buy_dvsn_cd") == "02" else "SELL",
@@ -451,6 +452,53 @@ class KISBroker:
                 "order_type": item.get("ord_dvsn_name", ""),
             })
         return result
+
+    def cancel_order(self, order_no: str, krx_fwdg_ord_orgno: str = "") -> dict:
+        """주문 취소 (TTTC0803U 실전 / VTTC0803U 모의) — 전량 취소"""
+        tr_id = "VTTC0803U" if KIS_MOCK else "TTTC0803U"
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl"
+        body = {
+            "CANO": self.acc_no,
+            "ACNT_PRDT_CD": self.acc_suffix,
+            "KRX_FWDG_ORD_ORGNO": krx_fwdg_ord_orgno,
+            "ORGN_ODNO": order_no,
+            "ORD_DVSN": "02",
+            "RVSE_CNCL_DVSN_CD": "02",
+            "ORD_QTY": "0",
+            "ORD_UNPR": "0",
+            "QTY_ALL_ORD_YN": "Y",
+        }
+        res = requests.post(url, headers=self._headers(tr_id), json=body, timeout=10)
+        res.raise_for_status()
+        data = res.json()
+        self._smart_sleep()
+        return {
+            "success": data.get("rt_cd") == "0",
+            "order_no": order_no,
+            "message": data.get("msg1", ""),
+        }
+
+    def cancel_all_pending_orders(self) -> list[dict]:
+        """미체결 주문 전량 취소 후 취소 결과 목록 반환"""
+        pending = self.get_pending_orders()
+        results = []
+        for order in pending:
+            try:
+                r = self.cancel_order(order["order_no"], order.get("krx_fwdg_ord_orgno", ""))
+                r["ticker"] = order["ticker"]
+                r["name"] = order["name"]
+                results.append(r)
+                logger.info("주문 취소: %s %s → %s", order["ticker"], order["order_no"], r["message"])
+            except Exception as e:
+                logger.error("주문 취소 실패: %s %s → %s", order["ticker"], order["order_no"], e)
+                results.append({
+                    "success": False,
+                    "order_no": order["order_no"],
+                    "ticker": order["ticker"],
+                    "name": order["name"],
+                    "message": str(e),
+                })
+        return results
 
     def get_order_history(self, start_date: str, end_date: str) -> list[dict]:
         """일별 주문체결 조회 (TTTC8001R 실전 / VTTC8001R 모의)

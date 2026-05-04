@@ -1,5 +1,6 @@
 """Gemini 기반 주식 트레이딩 에이전트"""
 import logging
+import os
 from datetime import datetime, time as dtime
 from pathlib import Path
 from data.utils import get_now_kst
@@ -57,6 +58,16 @@ class TradingAgent:
         set_sim_portfolio(sim_portfolio_in)
 
         try:
+            # 실전 모드에서만 미체결 주문 전량 취소 후 시작
+            if os.environ.get("DRY_RUN", "false").lower() != "true":
+                try:
+                    cancelled = _broker().cancel_all_pending_orders()
+                    if cancelled:
+                        logger.info("미체결 주문 %d건 취소: %s", len(cancelled),
+                                    [(c["ticker"], c["order_no"], c["success"]) for c in cancelled])
+                except Exception as e:
+                    logger.warning("미체결 주문 취소 중 오류 (무시하고 계속): %s", e)
+
             now = sim_datetime or get_now_kst()
             today = now.strftime("%Y-%m-%d %H:%M")
             run_ctx = _get_run_context(now)
