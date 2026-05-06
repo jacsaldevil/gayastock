@@ -3,8 +3,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Google AI Studio
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+# Vertex AI
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "")
+GCP_REGION = os.getenv("GCP_REGION", "asia-northeast3")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 # KIS API

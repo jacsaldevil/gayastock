@@ -12,8 +12,8 @@ env:
   AR_REPO: gayastock
   DASHBOARD_SERVICE: gayastock-dashboard
   AGENT_JOB: gayastock-agent
-  SECRETS_FLAGS: "GOOGLE_API_KEY=GOOGLE_API_KEY:latest,KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
-  ENV_FLAGS: "KIS_MOCK=false,MAX_BUY_AMOUNT=500000,MAX_POSITIONS=5,GCS_TOKEN_BUCKET=gayastock-token-cache-${{ secrets.GCP_PROJECT_ID }},GCS_DATA_BUCKET=gayastock-data-${{ secrets.GCP_PROJECT_ID }}"
+  SECRETS_FLAGS: "KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
+  ENV_FLAGS: "KIS_MOCK=false,MAX_BUY_AMOUNT=500000,MAX_POSITIONS=5,GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GCP_REGION=asia-northeast3,GCS_TOKEN_BUCKET=gayastock-token-cache-${{ secrets.GCP_PROJECT_ID }},GCS_DATA_BUCKET=gayastock-data-${{ secrets.GCP_PROJECT_ID }}"
 
 jobs:
   deploy:
@@ -35,6 +35,15 @@ jobs:
 
       - name: Setup gcloud CLI
         uses: google-github-actions/setup-gcloud@v2
+
+      - name: Grant Vertex AI permission to runner SA
+        run: |
+          SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
+          gcloud projects add-iam-policy-binding $PROJECT_ID \
+            --member="serviceAccount:$SA" \
+            --role="roles/aiplatform.user" \
+            --condition=None \
+            --quiet 2>/dev/null || true
 
       - name: Ensure GCS buckets exist
         run: |

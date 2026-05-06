@@ -2,7 +2,7 @@
 import json
 import os
 import re
-import google.generativeai as genai
+from vertexai.generative_models import Tool, FunctionDeclaration, Schema, Type
 from data.trade_log import log_trade
 
 def _is_dry_run() -> bool:
@@ -33,77 +33,77 @@ def _validate_ticker(ticker: str):
         raise ValueError(f"유효하지 않은 종목코드: {ticker!r} (6자리 숫자여야 합니다)")
 
 
-# Gemini FunctionDeclaration 형식
-GEMINI_TOOLS = genai.protos.Tool(
+# Vertex AI Tool 정의
+GEMINI_TOOLS = Tool(
     function_declarations=[
-        genai.protos.FunctionDeclaration(
+        FunctionDeclaration(
             name="get_stock_price",
             description=(
                 "주식 현재가 및 기본 투자지표(PER, PBR, EPS, 등락률)를 조회합니다. "
                 "매수/매도 판단 전에 반드시 호출하세요."
             ),
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
+            parameters=Schema(
+                type=Type.OBJECT,
                 properties={
-                    "ticker": genai.protos.Schema(
-                        type=genai.protos.Type.STRING,
+                    "ticker": Schema(
+                        type=Type.STRING,
                         description="6자리 종목코드 (예: 005930)",
                     ),
                 },
                 required=["ticker"],
             ),
         ),
-        genai.protos.FunctionDeclaration(
+        FunctionDeclaration(
             name="get_portfolio",
             description="현재 보유 종목, 수익률, 예수금(현금) 잔고를 조회합니다.",
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
+            parameters=Schema(
+                type=Type.OBJECT,
                 properties={},
             ),
         ),
-        genai.protos.FunctionDeclaration(
+        FunctionDeclaration(
             name="buy_stock",
             description=(
                 "주식을 시장가로 매수합니다. "
                 "매수 전 get_portfolio로 예수금, get_stock_price로 현재가를 반드시 확인하세요. "
                 "포지션 사이징: 가용예수금 × HA강도 비율 ÷ 남은 슬롯 수로 계산하세요."
             ),
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
+            parameters=Schema(
+                type=Type.OBJECT,
                 properties={
-                    "ticker": genai.protos.Schema(
-                        type=genai.protos.Type.STRING,
+                    "ticker": Schema(
+                        type=Type.STRING,
                         description="6자리 종목코드",
                     ),
-                    "quantity": genai.protos.Schema(
-                        type=genai.protos.Type.INTEGER,
+                    "quantity": Schema(
+                        type=Type.INTEGER,
                         description="매수 수량 (주)",
                     ),
-                    "reason": genai.protos.Schema(
-                        type=genai.protos.Type.STRING,
+                    "reason": Schema(
+                        type=Type.STRING,
                         description="매수 근거 (재무지표 수치 포함)",
                     ),
                 },
                 required=["ticker", "quantity", "reason"],
             ),
         ),
-        genai.protos.FunctionDeclaration(
+        FunctionDeclaration(
             name="get_top_volume_stocks",
             description=(
                 "현재 시장 거래량 상위 종목을 조회합니다. "
                 "반환된 목록에서 ETF/스팩/리츠 등을 제외한 후 상위 5종목을 분석 대상으로 선정하세요."
             ),
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
+            parameters=Schema(
+                type=Type.OBJECT,
                 properties={
-                    "n": genai.protos.Schema(
-                        type=genai.protos.Type.INTEGER,
+                    "n": Schema(
+                        type=Type.INTEGER,
                         description="조회할 종목 수 (기본 20)",
                     ),
                 },
             ),
         ),
-        genai.protos.FunctionDeclaration(
+        FunctionDeclaration(
             name="get_heikin_ashi_candles",
             description=(
                 "3분봉 하이킨아시 캔들을 조회합니다. "
@@ -111,33 +111,33 @@ GEMINI_TOOLS = genai.protos.Tool(
                 "upper_wick/lower_wick 크기, 패턴 설명(강한상승/상승저항/강한하락/하락저지)이 포함됩니다. "
                 "매수 전 진입 타이밍 판단에 활용하세요."
             ),
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
+            parameters=Schema(
+                type=Type.OBJECT,
                 properties={
-                    "ticker": genai.protos.Schema(
-                        type=genai.protos.Type.STRING,
+                    "ticker": Schema(
+                        type=Type.STRING,
                         description="6자리 종목코드",
                     ),
                 },
                 required=["ticker"],
             ),
         ),
-        genai.protos.FunctionDeclaration(
+        FunctionDeclaration(
             name="sell_stock",
             description="보유 종목을 시장가로 매도합니다.",
-            parameters=genai.protos.Schema(
-                type=genai.protos.Type.OBJECT,
+            parameters=Schema(
+                type=Type.OBJECT,
                 properties={
-                    "ticker": genai.protos.Schema(
-                        type=genai.protos.Type.STRING,
+                    "ticker": Schema(
+                        type=Type.STRING,
                         description="6자리 종목코드",
                     ),
-                    "quantity": genai.protos.Schema(
-                        type=genai.protos.Type.INTEGER,
+                    "quantity": Schema(
+                        type=Type.INTEGER,
                         description="매도 수량 (주)",
                     ),
-                    "reason": genai.protos.Schema(
-                        type=genai.protos.Type.STRING,
+                    "reason": Schema(
+                        type=Type.STRING,
                         description="매도 근거",
                     ),
                 },

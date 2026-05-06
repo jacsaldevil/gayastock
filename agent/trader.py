@@ -1,17 +1,18 @@
-"""Gemini 기반 주식 트레이딩 에이전트"""
+"""Gemini 기반 주식 트레이딩 에이전트 (Vertex AI)"""
 import logging
 import os
 from datetime import datetime, time as dtime
 from pathlib import Path
 from data.utils import get_now_kst
-import google.generativeai as genai
+import vertexai
+from vertexai.generative_models import GenerativeModel, GenerationConfig, Part, Content
 from agent.tools import GEMINI_TOOLS, execute_tool, _broker, set_sim_portfolio, get_sim_portfolio
 from data.trade_log import log_agent_run
-from config import GOOGLE_API_KEY, GEMINI_MODEL, MAX_POSITIONS, TAKE_PROFIT_PCT, STOP_LOSS_PCT
+from config import GCP_PROJECT_ID, GCP_REGION, GEMINI_MODEL, MAX_POSITIONS, TAKE_PROFIT_PCT, STOP_LOSS_PCT
 
 logger = logging.getLogger(__name__)
 
-genai.configure(api_key=GOOGLE_API_KEY)
+vertexai.init(project=GCP_PROJECT_ID, location=GCP_REGION)
 
 _PROMPT_FILE = Path(__file__).parent.parent / "prompts" / "system_prompt.md"
 SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").format(
@@ -40,11 +41,11 @@ def _get_run_context(now: datetime) -> str:
 class TradingAgent:
     def __init__(self):
         self.tool_call_log: list[dict] = []
-        self.model = genai.GenerativeModel(
+        self.model = GenerativeModel(
             model_name=GEMINI_MODEL,
             tools=[GEMINI_TOOLS],
             system_instruction=SYSTEM_PROMPT,
-            generation_config=genai.GenerationConfig(temperature=0.1),
+            generation_config=GenerationConfig(temperature=0.1),
         )
 
     def run(
@@ -116,11 +117,9 @@ class TradingAgent:
                             "result_preview": result_str[:400],
                         })
                         fn_responses.append(
-                            genai.protos.Part(
-                                function_response=genai.protos.FunctionResponse(
-                                    name=fn.name,
-                                    response={"result": result_str},
-                                )
+                            Part.from_function_response(
+                                name=fn.name,
+                                response={"result": result_str},
                             )
                         )
 
