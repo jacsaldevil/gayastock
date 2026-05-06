@@ -102,7 +102,7 @@ class TradingAgent:
                         logger.warning("Gemini 응답에 내용이 없습니다 (차단되었을 수 있음)")
                         break
 
-                    fn_calls = [p for p in parts if hasattr(p, "function_call") and p.function_call.name]
+                    fn_calls = [p for p in parts if p.function_call is not None]
 
                     if not fn_calls:
                         break
