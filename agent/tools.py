@@ -106,7 +106,7 @@ GEMINI_TOOLS = genai.protos.Tool(
         genai.protos.FunctionDeclaration(
             name="get_heikin_ashi_candles",
             description=(
-                "5분봉 하이킨아시 캔들을 조회합니다. "
+                "3분봉 하이킨아시 캔들을 조회합니다. "
                 "각 캔들에 ha_open/ha_high/ha_low/ha_close, bullish 여부, "
                 "upper_wick/lower_wick 크기, 패턴 설명(강한상승/상승저항/강한하락/하락저지)이 포함됩니다. "
                 "매수 전 진입 타이밍 판단에 활용하세요."

@@ -384,7 +384,7 @@ class KISBroker:
     # ── 분봉 / 하이킨아시 ────────────────────────────────────
 
     def get_minute_candles(self, ticker: str, fetch_count: int = 30) -> list[dict]:
-        """1분봉 조회 후 5분봉 집계 + 하이킨아시 계산 반환 (TR: FHKST03010200)"""
+        """1분봉 조회 후 3분봉 집계 + 하이킨아시 계산 반환 (TR: FHKST03010200)"""
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
         now = get_now_kst().strftime("%H%M%S")
         params = {
@@ -411,8 +411,8 @@ class KISBroker:
                 "volume": _to_int(r.get("cntg_vol")),
             })
 
-        candles_5m = _aggregate_5min(candles_1m)
-        return _compute_heikin_ashi(candles_5m)
+        candles_3m = _aggregate_3min(candles_1m)
+        return _compute_heikin_ashi(candles_3m)
 
     # ── 체결 이력 ─────────────────────────────────────────
 
@@ -560,13 +560,13 @@ def _is_fund(name: str) -> bool:
     return any(kw.upper() in upper for kw in _FUND_KEYWORDS)
 
 
-def _aggregate_5min(candles_1m: list[dict]) -> list[dict]:
-    """1분봉 리스트를 5분봉으로 집계"""
+def _aggregate_3min(candles_1m: list[dict]) -> list[dict]:
+    """1분봉 리스트를 3분봉으로 집계"""
     result = []
     n = len(candles_1m)
-    trimmed = candles_1m[n % 5:]  # 앞 자투리 제거, 5의 배수로 맞춤
-    for i in range(0, len(trimmed), 5):
-        group = trimmed[i:i + 5]
+    trimmed = candles_1m[n % 3:]  # 앞 자투리 제거, 3의 배수로 맞춤
+    for i in range(0, len(trimmed), 3):
+        group = trimmed[i:i + 3]
         if not group:
             continue
         result.append({
