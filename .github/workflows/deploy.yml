@@ -108,7 +108,7 @@ jobs:
             gcloud run jobs create $AGENT_JOB $COMMON_FLAGS
           fi
 
-      - name: Remove old Cloud Scheduler jobs (5회 → 10회 전환)
+      - name: Remove old Cloud Scheduler jobs (10회 → 20회 전환)
         continue-on-error: true
         run: |
           for OLD in "${AGENT_JOB}-morning" "${AGENT_JOB}-midday" "${AGENT_JOB}-afternoon" \
@@ -117,7 +117,7 @@ jobs:
             gcloud scheduler jobs delete "$OLD" --location $REGION --quiet 2>/dev/null || true
           done
 
-      - name: Ensure Cloud Scheduler jobs (10회/일)
+      - name: Ensure Cloud Scheduler jobs (20회/일)
         continue-on-error: true
         run: |
           SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
@@ -126,15 +126,25 @@ jobs:
 
           declare -A SCHEDULES=(
             ["${AGENT_JOB}-run01"]="40 9  * * 1-5"
-            ["${AGENT_JOB}-run02"]="10 10 * * 1-5"
-            ["${AGENT_JOB}-run03"]="40 10 * * 1-5"
-            ["${AGENT_JOB}-run04"]="10 11 * * 1-5"
-            ["${AGENT_JOB}-run05"]="40 11 * * 1-5"
-            ["${AGENT_JOB}-run06"]="20 12 * * 1-5"
-            ["${AGENT_JOB}-run07"]="0  13 * * 1-5"
-            ["${AGENT_JOB}-run08"]="40 13 * * 1-5"
-            ["${AGENT_JOB}-run09"]="20 14 * * 1-5"
-            ["${AGENT_JOB}-run10"]="10 15 * * 1-5"
+            ["${AGENT_JOB}-run02"]="57 9  * * 1-5"
+            ["${AGENT_JOB}-run03"]="14 10 * * 1-5"
+            ["${AGENT_JOB}-run04"]="31 10 * * 1-5"
+            ["${AGENT_JOB}-run05"]="48 10 * * 1-5"
+            ["${AGENT_JOB}-run06"]="5  11 * * 1-5"
+            ["${AGENT_JOB}-run07"]="22 11 * * 1-5"
+            ["${AGENT_JOB}-run08"]="39 11 * * 1-5"
+            ["${AGENT_JOB}-run09"]="56 11 * * 1-5"
+            ["${AGENT_JOB}-run10"]="13 12 * * 1-5"
+            ["${AGENT_JOB}-run11"]="30 12 * * 1-5"
+            ["${AGENT_JOB}-run12"]="47 12 * * 1-5"
+            ["${AGENT_JOB}-run13"]="4  13 * * 1-5"
+            ["${AGENT_JOB}-run14"]="21 13 * * 1-5"
+            ["${AGENT_JOB}-run15"]="38 13 * * 1-5"
+            ["${AGENT_JOB}-run16"]="55 13 * * 1-5"
+            ["${AGENT_JOB}-run17"]="12 14 * * 1-5"
+            ["${AGENT_JOB}-run18"]="29 14 * * 1-5"
+            ["${AGENT_JOB}-run19"]="46 14 * * 1-5"
+            ["${AGENT_JOB}-run20"]="10 15 * * 1-5"
           )
 
           for JOB_NAME in "${!SCHEDULES[@]}"; do
