@@ -256,6 +256,13 @@ elif page == "매매 이력":
 
 # ══════════════════════════════════════════════════════════
 elif page == "에이전트 로그":
+    def _summary_preview(text: str, max_len: int = 55) -> str:
+        for line in text.split('\n'):
+            line = line.strip().lstrip('#-| ').strip()
+            if line and not line.startswith('---'):
+                return line[:max_len] + ('…' if len(line) > max_len else '')
+        return "내용 없음"
+
     st.title("에이전트 실행 로그")
 
     runs = get_agent_runs()
@@ -282,7 +289,7 @@ elif page == "에이전트 로그":
         total_eval = portfolio.get("total_eval", 0)
         holdings_count = len(portfolio.get("holdings", []))
 
-        label = f"🤖 {ts_str}  |  분석종목: {', '.join(watchlist)}  |  잔고: ₩{total_eval:,.0f}"
+        label = f"🤖 {ts_str}  |  {_summary_preview(summary)}  |  잔고: ₩{total_eval:,.0f}"
         with st.expander(label, expanded=(i == 0)):
             col1, col2, col3 = st.columns(3)
             col1.metric("예수금", f"₩{cash:,.0f}")
