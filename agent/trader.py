@@ -46,9 +46,15 @@ def _get_run_context(now: datetime) -> str:
 class TradingAgent:
     def __init__(self):
         self.tool_call_log: list[dict] = []
-        self.model = GenerativeModel(
+        self._model_with_search = GenerativeModel(
             model_name=GEMINI_MODEL,
             tools=[GEMINI_TOOLS, Tool.from_google_search_retrieval(GoogleSearchRetrieval())],
+            system_instruction=SYSTEM_PROMPT,
+            generation_config=GenerationConfig(temperature=0.1),
+        )
+        self._model_no_search = GenerativeModel(
+            model_name=GEMINI_MODEL,
+            tools=[GEMINI_TOOLS],
             system_instruction=SYSTEM_PROMPT,
             generation_config=GenerationConfig(temperature=0.1),
         )
@@ -77,6 +83,10 @@ class TradingAgent:
             now = sim_datetime or get_now_kst()
             today = now.strftime("%Y-%m-%d %H:%M")
             run_ctx = _get_run_context(now)
+
+            # Google Search Grounding은 1회차(오전 진입)에만 사용
+            is_first_run = "1회차" in run_ctx
+            model = self._model_with_search if is_first_run else self._model_no_search
             user_message = (
                 f"[{today}] {run_ctx}\n"
                 "트레이딩을 시작합니다.\n\n"
@@ -87,9 +97,9 @@ class TradingAgent:
                 "5. 분석 결과와 판단 근거를 최종 보고서 형식으로 작성하세요."
             )
 
-            logger.info(f"트레이딩 에이전트 시작: {watchlist}")
+            logger.info(f"트레이딩 에이전트 시작: {watchlist} (Google Search: {'ON' if is_first_run else 'OFF'})")
             try:
-                chat = self.model.start_chat()
+                chat = model.start_chat()
                 response = chat.send_message(user_message)
             except Exception as e:
                 error_msg = f"Gemini API 초기 호출 실패: {e}"
