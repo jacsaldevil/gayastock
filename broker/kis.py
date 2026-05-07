@@ -597,9 +597,9 @@ def _compute_heikin_ashi(candles: list[dict]) -> list[dict]:
         bullish = body > 0
 
         if bullish:
-            pattern = "강한상승" if upper_wick < abs(body) * 0.25 else "상승저항(윗꼬리)"
+            pattern = "강한상승" if upper_wick < abs(body) * 0.15 else "상승저항(윗꼬리)"
         else:
-            pattern = "강한하락" if lower_wick < abs(body) * 0.25 else "하락저지(아랫꼬리)"
+            pattern = "강한하락" if lower_wick < abs(body) * 0.15 else "하락저지(아랫꼬리)"
 
         ha.append({
             "time": c["time"],

@@ -108,14 +108,16 @@ jobs:
             gcloud run jobs create $AGENT_JOB $COMMON_FLAGS
           fi
 
-      - name: Remove old Cloud Scheduler jobs (3회 → 5회 전환)
+      - name: Remove old Cloud Scheduler jobs (5회 → 10회 전환)
         continue-on-error: true
         run: |
-          for OLD in "${AGENT_JOB}-morning" "${AGENT_JOB}-midday" "${AGENT_JOB}-afternoon"; do
+          for OLD in "${AGENT_JOB}-morning" "${AGENT_JOB}-midday" "${AGENT_JOB}-afternoon" \
+                     "${AGENT_JOB}-run1" "${AGENT_JOB}-run2" "${AGENT_JOB}-run3" \
+                     "${AGENT_JOB}-run4" "${AGENT_JOB}-run5"; do
             gcloud scheduler jobs delete "$OLD" --location $REGION --quiet 2>/dev/null || true
           done
 
-      - name: Ensure Cloud Scheduler jobs (5회/일)
+      - name: Ensure Cloud Scheduler jobs (10회/일)
         continue-on-error: true
         run: |
           SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
@@ -123,11 +125,16 @@ jobs:
           FLAGS="--location $REGION --time-zone Asia/Seoul --uri $URI --http-method POST --oauth-service-account-email $SA --quiet"
 
           declare -A SCHEDULES=(
-            ["${AGENT_JOB}-run1"]="40 9 * * 1-5"
-            ["${AGENT_JOB}-run2"]="0 11 * * 1-5"
-            ["${AGENT_JOB}-run3"]="30 12 * * 1-5"
-            ["${AGENT_JOB}-run4"]="0 14 * * 1-5"
-            ["${AGENT_JOB}-run5"]="10 15 * * 1-5"
+            ["${AGENT_JOB}-run01"]="40 9  * * 1-5"
+            ["${AGENT_JOB}-run02"]="10 10 * * 1-5"
+            ["${AGENT_JOB}-run03"]="40 10 * * 1-5"
+            ["${AGENT_JOB}-run04"]="10 11 * * 1-5"
+            ["${AGENT_JOB}-run05"]="40 11 * * 1-5"
+            ["${AGENT_JOB}-run06"]="20 12 * * 1-5"
+            ["${AGENT_JOB}-run07"]="0  13 * * 1-5"
+            ["${AGENT_JOB}-run08"]="40 13 * * 1-5"
+            ["${AGENT_JOB}-run09"]="20 14 * * 1-5"
+            ["${AGENT_JOB}-run10"]="10 15 * * 1-5"
           )
 
           for JOB_NAME in "${!SCHEDULES[@]}"; do
