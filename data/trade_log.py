@@ -31,13 +31,17 @@ def _gcs_read_lines(blob_name: str) -> list[str]:
         return []
 
 
-def _gcs_append_line(blob_name: str, line: str):
+def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None):
     try:
         from google.cloud import storage
         bucket = storage.Client().bucket(_GCS_BUCKET)
         blob = bucket.blob(blob_name)
         existing = blob.download_as_text(encoding="utf-8") if blob.exists() else ""
-        blob.upload_from_string(existing + line + "\n",
+        lines = [l for l in existing.splitlines() if l.strip()]
+        lines.append(line)
+        if max_records:
+            lines = lines[-max_records:]
+        blob.upload_from_string("\n".join(lines) + "\n",
                                 content_type="text/plain; charset=utf-8")
     except Exception as e:
         logger.warning("GCS 쓰기 실패 (%s): %s", blob_name, e)
@@ -45,10 +49,17 @@ def _gcs_append_line(blob_name: str, line: str):
 
 # ── 로컬 파일 헬퍼 ────────────────────────────────────────
 
-def _local_append(filepath: str, line: str):
+def _local_append(filepath: str, line: str, max_records: int | None = None):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    with open(filepath, "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    if max_records:
+        lines = _local_read_lines(filepath)
+        lines.append(line)
+        lines = lines[-max_records:]
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+    else:
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
 
 
 def _local_read_lines(filepath: str) -> list[str]:
@@ -60,12 +71,12 @@ def _local_read_lines(filepath: str) -> list[str]:
 
 # ── 공통 ─────────────────────────────────────────────────
 
-def _append(blob_name: str, filepath: str, record: dict):
+def _append(blob_name: str, filepath: str, record: dict, max_records: int | None = None):
     line = json.dumps(record, ensure_ascii=False)
     if _GCS_BUCKET:
-        _gcs_append_line(blob_name, line)
+        _gcs_append_line(blob_name, line, max_records)
     else:
-        _local_append(filepath, line)
+        _local_append(filepath, line, max_records)
 
 
 def _read_all(blob_name: str, filepath: str) -> list[dict]:
@@ -83,6 +94,10 @@ def _read_all(blob_name: str, filepath: str) -> list[dict]:
 
 # ── 공개 API ─────────────────────────────────────────────
 
+_MAX_TRADE_RECORDS = 1000    # 매매 로그 최대 보존 건수
+_MAX_AGENT_RECORDS = 500     # 에이전트 실행 로그 최대 보존 건수 (20회/일 × 25일)
+
+
 def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool, name: str = ""):
     _append(_TRADE_BLOB, TRADE_LOG_FILE, {
         "ts": get_now_kst().isoformat(),
@@ -94,7 +109,7 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
         "amount": price * quantity,
         "reason": reason,
         "success": success,
-    })
+    }, max_records=_MAX_TRADE_RECORDS)
 
 
 def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict):
@@ -103,7 +118,7 @@ def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict):
         "watchlist": watchlist,
         "summary": summary,
         "portfolio": portfolio_snapshot,
-    })
+    }, max_records=_MAX_AGENT_RECORDS)
 
 
 def get_trades(limit: int = 200) -> list[dict]:
