@@ -157,6 +157,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
+            stock_name = price_info.get("name", ticker)
             total_cost = current_price * qty
 
             if _is_dry_run():
@@ -184,7 +185,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                         else:
                             holdings.append({
                                 "ticker": ticker,
-                                "name": price_info.get("name", ticker),
+                                "name": stock_name,
                                 "quantity": qty,
                                 "avg_price": current_price,
                                 "current_price": current_price,
@@ -201,7 +202,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                             "total_cost": total_cost,
                             "dry_run": True,
                         }
-                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False)
+                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
                 else:
                     result = {
                         "success": True,
@@ -211,13 +212,13 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                         "total_cost": total_cost,
                         "dry_run": True,
                     }
-                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False)
+                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
             else:
                 result = broker.buy_order(ticker, qty)
                 result["reason"] = reason
                 result["total_cost"] = total_cost
                 if result["success"]:
-                    log_trade("BUY", ticker, qty, current_price, reason, True)
+                    log_trade("BUY", ticker, qty, current_price, reason, True, stock_name)
 
         elif tool_name == "sell_stock":
             ticker = tool_input["ticker"]
@@ -245,6 +246,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
+            stock_name = price_info.get("name", ticker)
 
             if _is_dry_run():
                 if _sim_portfolio is not None:
@@ -269,12 +271,12 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "reason": reason,
                     "dry_run": True,
                 }
-                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False)
+                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
             else:
                 result = broker.sell_order(ticker, qty)
                 result["reason"] = reason
                 if result["success"]:
-                    log_trade("SELL", ticker, qty, current_price, reason, True)
+                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name)
 
         else:
             result = {"error": f"알 수 없는 tool: {tool_name}"}

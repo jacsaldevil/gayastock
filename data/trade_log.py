@@ -83,11 +83,12 @@ def _read_all(blob_name: str, filepath: str) -> list[dict]:
 
 # ── 공개 API ─────────────────────────────────────────────
 
-def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool):
+def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool, name: str = ""):
     _append(_TRADE_BLOB, TRADE_LOG_FILE, {
         "ts": get_now_kst().isoformat(),
         "action": action,
         "ticker": ticker,
+        "name": name,
         "quantity": quantity,
         "price": price,
         "amount": price * quantity,
