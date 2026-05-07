@@ -5,7 +5,7 @@ from datetime import datetime, time as dtime
 from pathlib import Path
 from data.utils import get_now_kst
 import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig, Part, Content
+from vertexai.generative_models import GenerativeModel, GenerationConfig, Part, Content, Tool, GoogleSearchRetrieval
 from agent.tools import GEMINI_TOOLS, execute_tool, _broker, set_sim_portfolio, get_sim_portfolio
 from data.trade_log import log_agent_run
 from config import GCP_PROJECT_ID, GCP_REGION, GEMINI_MODEL, MAX_POSITIONS, TAKE_PROFIT_PCT, STOP_LOSS_PCT
@@ -43,7 +43,7 @@ class TradingAgent:
         self.tool_call_log: list[dict] = []
         self.model = GenerativeModel(
             model_name=GEMINI_MODEL,
-            tools=[GEMINI_TOOLS],
+            tools=[GEMINI_TOOLS, Tool.from_google_search_retrieval(GoogleSearchRetrieval())],
             system_instruction=SYSTEM_PROMPT,
             generation_config=GenerationConfig(temperature=0.1),
         )

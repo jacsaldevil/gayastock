@@ -302,10 +302,11 @@ LLM이 매수/매도를 전적으로 판단하고, 구조 변경 없이 현행 �
 
 ### 전략 개요
 
-**"매일 시장이 선택한 Top 5 종목을 HA로 골라 공격적으로 당일 매매"**
+**"Google 검색으로 시장 흐름 파악 + 거래량 Top10 HA 분석으로 당일 매매"**
 
 - 재무 필터 완전 제거
-- 거래량 상위로 당일 주목 종목 동적 발굴
+- 거래량 Top10으로 당일 주목 종목 동적 발굴
+- Vertex AI Grounding(Google Search)으로 오늘의 테마/이슈 실시간 반영
 - LLM이 HA 패턴으로 최적 진입 종목과 매수 비율 판단
 - 당일 전량 청산 원칙으로 오버나이트 리스크 제로
 
@@ -314,13 +315,19 @@ LLM이 매수/매도를 전적으로 판단하고, 구조 변경 없이 현행 �
 ### 종목 선정
 
 ```
-get_top_volume_stocks(n=20) 호출 후 상위 5종목 선정
-  - KOSPI / KOSDAQ 순수 주식만
-  - ETF, ETN, 스팩, 관리종목, 우선주 제외 (API + 이름 키워드 이중 필터)
-  - 키워드 제외: ETF, SPAC, 스팩, 리츠, 인버스, 레버리지, TR, 채권, 국채, 금융채
+1. Google Search Grounding으로 오늘 시장 테마/이슈 파악
+   - "오늘 코스피 급등 테마주", "코스닥 상한가 종목" 등 검색
+   - 이슈 종목 코드 파악 (보완용)
+
+2. get_top_volume_stocks(n=10) 호출 후 상위 5종목 선정
+   - KOSPI / KOSDAQ 순수 주식만
+   - ETF, ETN, 스팩, 관리종목, 우선주 제외 (API + 이름 키워드 이중 필터)
+   - 키워드 제외: ETF, SPAC, 스팩, 리츠, 인버스, 레버리지, TR, 채권, 국채, 금융채
+
+3. 검색에서 파악한 이슈 종목 중 Top10 미포함 종목 추가 검토 (최대 2종목)
 ```
 
-재무 조회 없음. 당일 시장이 선택한 종목에 집중.
+재무 조회 없음. 거래량 데이터 + 실시간 뉴스를 결합해 당일 주도 종목 포착.
 
 ---
 
@@ -431,13 +438,16 @@ MAX_POSITIONS   = 5     # 동시 보유 최대 종목 수
 | 2026-05-04 | 에이전트 시작 시 미체결 주문 자동 전량 취소 (`cancel_all_pending_orders`) |
 | 2026-05-06 | HA 강한상승 임계값 완화: 15% → **25%** |
 | 2026-05-06 | 분봉 변경: 5분봉 → **3분봉** (10캔들/30분, 더 세밀한 패턴 감지) |
+| 2026-05-07 | Vertex AI Grounding(Google Search) 추가 — 시장 뉴스/테마 실시간 반영 |
+| 2026-05-07 | 거래량 스캔 n=20 → **n=10** 으로 변경 |
 
 ---
 
 ### 구현 체크리스트
 
-- [x] `get_top_volume_stocks` (`broker/kis.py`)
+- [x] `get_top_volume_stocks` n=10 (`broker/kis.py`)
 - [x] `get_heikin_ashi_candles` — 3분봉 집계 + HA 계산 (`broker/kis.py`)
+- [x] Vertex AI Grounding — Google Search 실시간 연동 (`agent/trader.py`)
 - [x] HA 임계값 25% (`broker/kis.py` `_aggregate_3min`)
 - [x] `config.py` — `TAKE_PROFIT_PCT`, `STOP_LOSS_PCT` 추가
 - [x] `prompts/system_prompt.md` — v4 룰, 회차별 행동 규칙 포함
