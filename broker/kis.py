@@ -317,26 +317,45 @@ class KISBroker:
         holdings = []
         for item in data.get("output1", []):
             qty = int(item.get("hldg_qty", 0) or 0)
-            if qty > 0:
-                avg = _to_float(item.get("pchs_avg_pric"))
-                cur = int(item.get("prpr", 0) or 0)
-                pl_rate = round((cur - avg) / avg * 100, 2) if avg > 0 else 0.0
-                holdings.append({
-                    "ticker": item.get("pdno"),
-                    "name": item.get("prdt_name"),
-                    "quantity": qty,
-                    "avg_price": avg,
-                    "current_price": cur,
-                    "profit_loss_rate": pl_rate,
-                })
+            if qty <= 0:
+                continue
+
+            # 평균단가: pchs_avg_pric 우선, 0이면 pchs_amt(매입금액) / qty로 역산
+            avg = _to_float(item.get("pchs_avg_pric"))
+            if avg == 0:
+                pchs_amt = _to_float(item.get("pchs_amt", 0))
+                avg = round(pchs_amt / qty, 2) if pchs_amt > 0 else 0
+
+            cur = int(item.get("prpr", 0) or 0)
+
+            # 수익률: avg가 확보된 경우 직접 계산, 아니면 API evlu_pfls_rt 사용
+            if avg > 0:
+                pl_rate = round((cur - avg) / avg * 100, 2)
+            else:
+                pl_rate = _to_float(item.get("evlu_pfls_rt"))
+
+            # 손익금액: evlu_pfls_amt 직접 사용, 없으면 계산
+            pl_amt = _to_int(item.get("evlu_pfls_amt", 0))
+            if pl_amt == 0 and avg > 0:
+                pl_amt = int((cur - avg) * qty)
+
+            holdings.append({
+                "ticker": item.get("pdno"),
+                "name": item.get("prdt_name"),
+                "quantity": qty,
+                "avg_price": avg,
+                "current_price": cur,
+                "profit_loss_rate": pl_rate,
+                "profit_loss_amt": pl_amt,
+            })
 
         summary = data.get("output2", [{}])[0]
         cash = int(summary.get("dnca_tot_amt", 0) or 0)
         total_eval = int(summary.get("tot_evlu_amt", 0) or 0)
-        # evlu_pfls_smtl_amt가 0이면 보유 종목에서 직접 계산
+        # 총손익: API 값 우선, 0이면 보유종목 손익금액 합산
         api_pl = int(summary.get("evlu_pfls_smtl_amt", 0) or 0)
-        computed_pl = sum((h["current_price"] - h["avg_price"]) * h["quantity"] for h in holdings)
-        profit_loss = api_pl if api_pl != 0 else int(computed_pl)
+        computed_pl = sum(h["profit_loss_amt"] for h in holdings)
+        profit_loss = api_pl if api_pl != 0 else computed_pl
         return {
             "cash": cash,
             "total_eval": total_eval,
