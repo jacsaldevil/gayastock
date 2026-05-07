@@ -318,20 +318,29 @@ class KISBroker:
         for item in data.get("output1", []):
             qty = int(item.get("hldg_qty", 0) or 0)
             if qty > 0:
+                avg = _to_float(item.get("pchs_avg_pric"))
+                cur = int(item.get("prpr", 0) or 0)
+                pl_rate = round((cur - avg) / avg * 100, 2) if avg > 0 else 0.0
                 holdings.append({
                     "ticker": item.get("pdno"),
                     "name": item.get("prdt_name"),
                     "quantity": qty,
-                    "avg_price": _to_float(item.get("pchs_avg_pric")),
-                    "current_price": int(item.get("prpr", 0) or 0),
-                    "profit_loss_rate": _to_float(item.get("evlu_pfls_rt")),
+                    "avg_price": avg,
+                    "current_price": cur,
+                    "profit_loss_rate": pl_rate,
                 })
 
         summary = data.get("output2", [{}])[0]
+        cash = int(summary.get("dnca_tot_amt", 0) or 0)
+        total_eval = int(summary.get("tot_evlu_amt", 0) or 0)
+        # evlu_pfls_smtl_amt가 0이면 보유 종목에서 직접 계산
+        api_pl = int(summary.get("evlu_pfls_smtl_amt", 0) or 0)
+        computed_pl = sum((h["current_price"] - h["avg_price"]) * h["quantity"] for h in holdings)
+        profit_loss = api_pl if api_pl != 0 else int(computed_pl)
         return {
-            "cash": int(summary.get("dnca_tot_amt", 0) or 0),
-            "total_eval": int(summary.get("tot_evlu_amt", 0) or 0),
-            "profit_loss": int(summary.get("evlu_pfls_smtl_amt", 0) or 0),
+            "cash": cash,
+            "total_eval": total_eval,
+            "profit_loss": profit_loss,
             "holdings": holdings,
         }
 
