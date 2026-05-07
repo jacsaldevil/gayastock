@@ -111,7 +111,7 @@ if page == "포트폴리오":
             return color
 
         st.dataframe(
-            df[display_cols].style.applymap(color_pl, subset=["수익률(%)"]).format({
+            df[display_cols].style.map(color_pl, subset=["수익률(%)"]).format({
                 "평균단가": "{:,.0f}",
                 "현재가": "{:,.0f}",
                 "수익률(%)": "{:+.2f}%",
