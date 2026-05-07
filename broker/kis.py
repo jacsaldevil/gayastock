@@ -352,10 +352,24 @@ class KISBroker:
         summary = data.get("output2", [{}])[0]
         cash = int(summary.get("dnca_tot_amt", 0) or 0)
         total_eval = int(summary.get("tot_evlu_amt", 0) or 0)
-        # 총손익: API 값 우선, 0이면 보유종목 손익금액 합산
+
+        # 손익 계산 우선순위:
+        # 1) evlu_pfls_smtl_amt (API 합계)
+        # 2) scts_evlu_amt - pchs_amt_smtl_amt (보유주식 평가 - 매입금액 합계)
+        # 3) holdings 개별 합산
+        # 4) total_eval - cash - 매입금액 (예수금 방식)
         api_pl = int(summary.get("evlu_pfls_smtl_amt", 0) or 0)
-        computed_pl = sum(h["profit_loss_amt"] for h in holdings)
-        profit_loss = api_pl if api_pl != 0 else computed_pl
+        scts_evlu = int(summary.get("scts_evlu_amt", 0) or 0)
+        pchs_smtl = int(summary.get("pchs_amt_smtl_amt", 0) or 0)
+
+        if api_pl != 0:
+            profit_loss = api_pl
+        elif pchs_smtl > 0:
+            profit_loss = scts_evlu - pchs_smtl
+        else:
+            holdings_pl = sum(h["profit_loss_amt"] for h in holdings)
+            profit_loss = holdings_pl if holdings_pl != 0 else (total_eval - cash) - pchs_smtl
+
         return {
             "cash": cash,
             "total_eval": total_eval,
