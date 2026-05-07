@@ -77,8 +77,8 @@ if page == "포트폴리오":
     holdings = data.get("holdings", [])
 
     holding_eval = sum(h["current_price"] * h["quantity"] for h in holdings)
-    total_invested = total_eval - cash
-    pl_rate = (profit_loss / (total_invested - profit_loss) * 100) if (total_invested - profit_loss) > 0 else 0
+    cost_basis = holding_eval - profit_loss
+    pl_rate = (profit_loss / cost_basis * 100) if cost_basis > 0 else 0
 
     col1.metric("예수금", f"₩{cash:,.0f}")
     col2.metric("평가금액", f"₩{total_eval:,.0f}")
