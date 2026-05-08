@@ -70,22 +70,71 @@ if page == "포트폴리오":
         st.stop()
 
     # 상단 요약 카드
-    col1, col2, col3, col4 = st.columns(4)
-    cash = data.get("cash", 0)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    invested = data.get("cash", 0)       # KIS dnca_tot_amt = 원금(총 입금액)
     total_eval = data.get("total_eval", 0)
     profit_loss = data.get("profit_loss", 0)
     holdings = data.get("holdings", [])
 
     holding_eval = sum(h["current_price"] * h["quantity"] for h in holdings)
+    available_cash = total_eval - holding_eval   # 실제 가용 예수금
     securities_eval = holding_eval if holding_eval > 0 else total_eval
     cost_basis = securities_eval - profit_loss
     pl_rate = round((profit_loss / cost_basis * 100), 2) if cost_basis > 0 else 0.0
 
-    col1.metric("예수금", f"₩{cash:,.0f}")
-    col2.metric("평가금액", f"₩{total_eval:,.0f}")
-    col3.metric("평가손익", f"₩{profit_loss:,.0f}", f"{pl_rate:+.2f}%",
+    col1.metric("투자금액", f"₩{invested:,.0f}")
+    col2.metric("예수금", f"₩{available_cash:,.0f}")
+    col3.metric("평가금액", f"₩{total_eval:,.0f}")
+    col4.metric("평가손익", f"₩{profit_loss:,.0f}", f"{pl_rate:+.2f}%",
                 delta_color="normal" if profit_loss >= 0 else "inverse")
-    col4.metric("보유 종목 수", f"{len(holdings)}개")
+    col5.metric("보유 종목 수", f"{len(holdings)}개")
+
+    st.divider()
+
+    # 손익률 추이 차트
+    st.subheader("손익률 추이")
+    _period_col, _ = st.columns([1, 3])
+    with _period_col:
+        _days = st.selectbox("기간", [5, 10, 20, 30], index=1, format_func=lambda x: f"최근 {x}일", label_visibility="collapsed")
+
+    _runs = get_agent_runs(limit=500)
+    if _runs:
+        def _run_pl_rate(r):
+            p = r.get("portfolio", {})
+            _pl = p.get("profit_loss", 0) or 0
+            _te = p.get("total_eval", 0) or 0
+            _hs = p.get("holdings", []) or []
+            _he = sum(h.get("current_price", 0) * h.get("quantity", 0) for h in _hs)
+            _se = _he if _he > 0 else _te
+            _cb = _se - _pl
+            return round((_pl / _cb * 100), 2) if _cb > 0 else 0.0
+
+        _rdf = pd.DataFrame([{"ts": r["ts"], "pl_rate": _run_pl_rate(r)} for r in _runs])
+        _rdf["ts"] = pd.to_datetime(_rdf["ts"], utc=True).dt.tz_convert(KST)
+        _rdf["date"] = _rdf["ts"].dt.date
+        _daily = _rdf.sort_values("ts").groupby("date")["pl_rate"].last().reset_index()
+        _cutoff = (get_now_kst() - timedelta(days=_days)).date()
+        _daily = _daily[_daily["date"] >= _cutoff]
+
+        if not _daily.empty:
+            _colors = ["#e74c3c" if v < 0 else "#2ecc71" for v in _daily["pl_rate"]]
+            _fig_pl = go.Figure()
+            _fig_pl.add_trace(go.Bar(
+                x=_daily["date"], y=_daily["pl_rate"],
+                marker_color=_colors,
+                text=[f"{v:+.2f}%" for v in _daily["pl_rate"]],
+                textposition="outside",
+            ))
+            _fig_pl.add_hline(y=0, line_color="gray", line_width=1)
+            _fig_pl.update_layout(
+                yaxis_title="손익률 (%)", xaxis_title="날짜",
+                height=260, margin=dict(t=10, b=40, l=40, r=20),
+            )
+            st.plotly_chart(_fig_pl, use_container_width=True)
+        else:
+            st.info("해당 기간의 에이전트 실행 데이터가 없습니다.")
+    else:
+        st.info("에이전트 실행 기록이 없어 손익률 추이를 표시할 수 없습니다.")
 
     st.divider()
 
