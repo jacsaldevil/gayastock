@@ -110,7 +110,7 @@ if page == "포트폴리오":
             return round((_pl / _cb * 100), 2) if _cb > 0 else 0.0
 
         _rdf = pd.DataFrame([{"ts": r["ts"], "pl_rate": _run_pl_rate(r)} for r in _runs])
-        _rdf["ts"] = pd.to_datetime(_rdf["ts"], utc=True).dt.tz_convert(KST)
+        _rdf["ts"] = pd.to_datetime(_rdf["ts"], format='ISO8601').dt.tz_convert(KST)
         _rdf["date"] = _rdf["ts"].dt.date
         _daily = _rdf.sort_values("ts").groupby("date")["pl_rate"].last().reset_index()
         _cutoff = (get_now_kst() - timedelta(days=_days)).date()
