@@ -58,7 +58,7 @@ class TradingAgent:
         self.tool_call_log: list[dict] = []
         self._model_with_search = GenerativeModel(
             model_name=GEMINI_MODEL,
-            tools=[GEMINI_TOOLS, Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval())],
+            tools=[GEMINI_TOOLS, Tool.from_google_search_retrieval(grounding.GoogleSearch())],
             system_instruction=SYSTEM_PROMPT,
             generation_config=GenerationConfig(temperature=0.1),
         )
