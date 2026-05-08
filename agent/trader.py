@@ -53,12 +53,26 @@ def _get_run_context(now: datetime) -> str:
     return best[1]
 
 
+def _make_search_tool():
+    """SDK 버전에 따라 Google Search grounding Tool 생성."""
+    try:
+        return Tool(google_search=grounding.GoogleSearch())
+    except AttributeError:
+        try:
+            return Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval())
+        except AttributeError:
+            logger.warning("Google Search grounding 미지원 SDK — 검색 없이 실행")
+            return None
+
+
 class TradingAgent:
     def __init__(self):
         self.tool_call_log: list[dict] = []
+        search_tool = _make_search_tool()
+        search_tools = [GEMINI_TOOLS, search_tool] if search_tool else [GEMINI_TOOLS]
         self._model_with_search = GenerativeModel(
             model_name=GEMINI_MODEL,
-            tools=[GEMINI_TOOLS, Tool.from_google_search_retrieval(grounding.GoogleSearch())],
+            tools=search_tools,
             system_instruction=SYSTEM_PROMPT,
             generation_config=GenerationConfig(temperature=0.1),
         )
