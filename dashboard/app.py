@@ -127,7 +127,7 @@ if page == "포트폴리오":
             ))
             _fig_pl.add_hline(y=0, line_color="gray", line_width=1)
             _fig_pl.update_layout(
-                yaxis_title="손익률 (%)", xaxis_title="날짜",
+                yaxis_title="손익률 (%)",
                 height=260, margin=dict(t=10, b=40, l=40, r=20),
             )
             st.plotly_chart(_fig_pl, use_container_width=True)
