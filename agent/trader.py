@@ -54,15 +54,20 @@ def _get_run_context(now: datetime) -> str:
 
 
 def _make_search_tool():
-    """SDK 버전에 따라 Google Search grounding Tool 생성."""
+    """Google Search grounding Tool 생성 — SDK 버전별 호환."""
+    # 1) 신규 SDK: grounding.GoogleSearch()
     try:
         return Tool(google_search=grounding.GoogleSearch())
     except AttributeError:
-        try:
-            return Tool.from_google_search_retrieval(grounding.GoogleSearchRetrieval())
-        except AttributeError:
-            logger.warning("Google Search grounding 미지원 SDK — 검색 없이 실행")
-            return None
+        pass
+    # 2) Tool 생성자에 직접 dict 전달 (중간 SDK 버전)
+    try:
+        return Tool(google_search={})
+    except Exception:
+        pass
+    # 3) 포기 — 검색 없이 실행
+    logger.warning("Google Search grounding 미지원 SDK — 검색 없이 실행")
+    return None
 
 
 class TradingAgent:
