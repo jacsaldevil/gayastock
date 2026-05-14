@@ -438,7 +438,9 @@ class KISBroker:
         }
         res = requests.get(url, headers=self._headers("FHKST03010200"), params=params, timeout=10)
         res.raise_for_status()
-        output = res.json().get("output2", [])
+        data_json = res.json()
+        output = data_json.get("output2", [])
+        stock_name = data_json.get("output1", {}).get("hts_kor_isnm", "")
         self._smart_sleep()
 
         # 오래된 순으로 정렬 (API는 최신 순 반환), 전체 데이터 수집
@@ -466,6 +468,7 @@ class KISBroker:
             "vwap": vwap_data["vwap"],
             "vwap_deviation_pct": vwap_data["deviation_pct"],
             "current_price": current_price,
+            "name": stock_name,
         }
 
     # ── 체결 이력 ─────────────────────────────────────────

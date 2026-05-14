@@ -139,14 +139,22 @@ def _fetch_candles(ticker: str) -> dict:
         return {}
 
 
+def _fmt_time(t: str) -> str:
+    """HHMMSS → HH:MM"""
+    if len(t) >= 4:
+        return f"{t[:2]}:{t[2:4]}"
+    return t
+
+
 def _render_ha_chart(ticker: str, name: str, candle_data: dict):
     candles = candle_data.get("candles", [])
     if not candles:
         st.caption(f"{ticker} 데이터 없음")
         return
+    display_name = name or candle_data.get("name", "") or ticker
     vwap = candle_data.get("vwap", 0)
     dev_pct = candle_data.get("vwap_deviation_pct", 0)
-    times = [c.get("time", str(j)) for j, c in enumerate(candles)]
+    times = [_fmt_time(c.get("time", "")) or str(j) for j, c in enumerate(candles)]
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
         x=times,
@@ -167,11 +175,12 @@ def _render_ha_chart(ticker: str, name: str, candle_data: dict):
             annotation_position="bottom right",
         )
     fig.update_layout(
-        title=f"{name or ticker} ({ticker}) 3분봉 HA",
+        title=f"{display_name} ({ticker}) 3분봉 HA",
         height=240,
         margin=dict(t=35, b=20, l=45, r=20),
         xaxis_rangeslider_visible=False,
         xaxis_tickangle=-45,
+        xaxis=dict(type="category"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -464,7 +473,10 @@ elif page == "에이전트 로그":
         holdings_count = len(portfolio.get("holdings", []))
 
         buy_tickers = run.get("buy_tickers", [])
-        buy_badge = f"  |  매수: {', '.join(buy_tickers)}" if buy_tickers else ""
+        # 종목명 조회: 포트폴리오 보유 종목에서 우선 참조
+        _hmap = {h.get("ticker"): h.get("name", "") for h in portfolio.get("holdings", [])}
+        _buy_names = [_hmap.get(t) or t for t in buy_tickers]
+        buy_badge = f"  |  매수: {', '.join(_buy_names)}" if buy_tickers else ""
         label = f"🤖 {ts_str}  |  {_summary_preview(summary)}  |  잔고: ₩{total_eval:,.0f}{buy_badge}"
         with st.expander(label, expanded=(i == 0)):
             col1, col2, col3 = st.columns(3)
@@ -481,9 +493,9 @@ elif page == "에이전트 로그":
                         for j, ticker in enumerate(buy_tickers):
                             with chart_cols[j % 2]:
                                 candle_data = _fetch_candles(ticker)
-                                _render_ha_chart(ticker, "", candle_data)
+                                _render_ha_chart(ticker, _hmap.get(ticker, ""), candle_data)
                     else:
-                        st.caption(f"매수 종목: {', '.join(buy_tickers)}  (과거 데이터 — 차트 생략)")
+                        st.caption(f"매수 종목: {', '.join(_buy_names)}  (과거 데이터 — 차트 생략)")
                 except Exception as e:
                     st.caption(f"차트 조회 오류: {e}")
 
