@@ -232,7 +232,6 @@ if page == "포트폴리오":
             _se = _he if _he > 0 else _te
             _cb = _se - _pl
             return round((_pl / _cb * 100), 2) if _cb > 0 else 0.0
-        del _ic
 
         _rdf = pd.DataFrame([{"ts": r["ts"], "pl_rate": _run_pl_rate(r)} for r in _runs])
         _rdf["ts"] = pd.to_datetime(_rdf["ts"], format='ISO8601', utc=True).dt.tz_convert(KST)
