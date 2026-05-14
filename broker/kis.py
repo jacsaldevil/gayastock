@@ -425,8 +425,8 @@ class KISBroker:
 
     # ── 분봉 / 하이킨아시 ────────────────────────────────────
 
-    def get_minute_candles(self, ticker: str, fetch_count: int = 30) -> list[dict]:
-        """1분봉 조회 후 3분봉 집계 + 하이킨아시 계산 반환 (TR: FHKST03010200)"""
+    def get_minute_candles(self, ticker: str, ha_candle_count: int = 30) -> dict:
+        """1분봉 조회 후 VWAP 계산 + 3분봉 집계 + 하이킨아시 계산 반환 (TR: FHKST03010200)"""
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
         now = get_now_kst().strftime("%H%M%S")
         params = {
@@ -441,10 +441,10 @@ class KISBroker:
         output = res.json().get("output2", [])
         self._smart_sleep()
 
-        # 오래된 순으로 정렬 (API는 최신 순 반환)
-        candles_1m = []
-        for r in reversed(output[:fetch_count]):
-            candles_1m.append({
+        # 오래된 순으로 정렬 (API는 최신 순 반환), 전체 데이터 수집
+        all_candles_1m = []
+        for r in reversed(output):
+            all_candles_1m.append({
                 "time": r.get("stck_cntg_hour", ""),
                 "open": _to_int(r.get("stck_oprc")),
                 "high": _to_int(r.get("stck_hgpr")),
@@ -453,8 +453,20 @@ class KISBroker:
                 "volume": _to_int(r.get("cntg_vol")),
             })
 
-        candles_3m = _aggregate_3min(candles_1m)
-        return _compute_heikin_ashi(candles_3m)
+        current_price = all_candles_1m[-1]["close"] if all_candles_1m else 0
+        vwap_data = _compute_vwap(all_candles_1m, current_price)
+
+        # HA: 최근 ha_candle_count개 1분봉 → 3분봉 집계 → HA 계산
+        recent_1m = all_candles_1m[-ha_candle_count:] if len(all_candles_1m) > ha_candle_count else all_candles_1m
+        candles_3m = _aggregate_3min(recent_1m)
+        ha_candles = _compute_heikin_ashi(candles_3m)
+
+        return {
+            "candles": ha_candles,
+            "vwap": vwap_data["vwap"],
+            "vwap_deviation_pct": vwap_data["deviation_pct"],
+            "current_price": current_price,
+        }
 
     # ── 체결 이력 ─────────────────────────────────────────
 
@@ -600,6 +612,25 @@ _FUND_KEYWORDS = (
 def _is_fund(name: str) -> bool:
     upper = name.upper()
     return any(kw.upper() in upper for kw in _FUND_KEYWORDS)
+
+
+def _compute_vwap(candles_1m: list[dict], current_price: int) -> dict:
+    """1분봉 전체로 VWAP 계산. deviation_pct = (현재가 - VWAP) / VWAP × 100"""
+    total_tp_vol = 0.0
+    total_vol = 0
+    for c in candles_1m:
+        if c["volume"] == 0:
+            continue
+        tp = (c["high"] + c["low"] + c["close"]) / 3
+        total_tp_vol += tp * c["volume"]
+        total_vol += c["volume"]
+
+    if total_vol == 0 or current_price == 0:
+        return {"vwap": 0, "deviation_pct": 0.0}
+
+    vwap = round(total_tp_vol / total_vol)
+    deviation_pct = round((current_price - vwap) / vwap * 100, 2)
+    return {"vwap": vwap, "deviation_pct": deviation_pct}
 
 
 def _aggregate_3min(candles_1m: list[dict]) -> list[dict]:
