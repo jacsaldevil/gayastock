@@ -80,6 +80,18 @@ def run_trading():
     summaries: list[str] = []
     all_buy_tickers: list[str] = []
 
+    # dry-run 시 1회차 조건 강제 (실행 날짜의 첫 번째 스케줄 슬롯 시각으로 고정)
+    sim_dt = None
+    if dry_run:
+        from agent.trader import _SCHEDULE_SLOTS
+        from datetime import datetime as _dt
+        now_kst = get_now_kst()
+        first_slot = _SCHEDULE_SLOTS[0][0]
+        sim_dt = _dt(now_kst.year, now_kst.month, now_kst.day,
+                     first_slot.hour, first_slot.minute,
+                     tzinfo=now_kst.tzinfo)
+        logger.info("DRY-RUN: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%H:%M"))
+
     for i in range(INNER_LOOP_COUNT):
         logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
 
@@ -94,7 +106,7 @@ def run_trading():
                 needs_action = True
 
         if needs_action:
-            result = agent.run(cancel_pending=(i == 0), skip_log=True)
+            result = agent.run(cancel_pending=(i == 0), skip_log=True, sim_datetime=sim_dt)
             summaries.append(result)
             for t in agent.buy_tickers:
                 if t not in all_buy_tickers:
