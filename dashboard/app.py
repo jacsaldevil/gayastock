@@ -13,7 +13,52 @@ import plotly.graph_objects as go
 import plotly.express as px
 from data.financial import _get_broker as _get_kis_broker
 from data.trade_log import get_trades, get_agent_runs
-from config import INITIAL_CAPITAL
+from config import INITIAL_CAPITAL as _INITIAL_CAPITAL_ENV
+
+_GCS_DATA_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
+_SETTINGS_BLOB = "settings.json"
+
+
+def _load_settings() -> dict:
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
+            if blob.exists():
+                return json.loads(blob.download_as_text())
+        except Exception:
+            pass
+    # 로컈 fallback
+    try:
+        with open(".dashboard_settings.json", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_settings(data: dict):
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
+            blob.upload_from_string(json.dumps(data), content_type="application/json")
+            return
+        except Exception:
+            pass
+    try:
+        with open(".dashboard_settings.json", "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def _get_initial_capital() -> int:
+    """GCS 설정 → 환경변수 순으로 투자금액 반환"""
+    settings = _load_settings()
+    val = settings.get("initial_capital", 0)
+    if val > 0:
+        return val
+    return _INITIAL_CAPITAL_ENV
 
 
 def _get_sim_datetime(live: bool):
@@ -63,6 +108,20 @@ st.sidebar.title("📈 gayastock")
 st.sidebar.caption("AI 주식 트레이딩 에이전트")
 page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그", "에이전트 실행"])
 refresh = st.sidebar.button("🔄 새로고침")
+
+st.sidebar.divider()
+st.sidebar.markdown("**💰 투자금액 설정**")
+_cur_capital = _get_initial_capital()
+_new_capital = st.sidebar.number_input(
+    "투자 원금 (원)", min_value=0, step=10000,
+    value=_cur_capital, format="%d",
+    help="0이면 현재 예수금 기준으로 표시됩니다.",
+    label_visibility="collapsed",
+)
+if st.sidebar.button("저장", use_container_width=True):
+    _save_settings({"initial_capital": int(_new_capital)})
+    st.cache_data.clear()
+    st.rerun()
 
 @st.cache_data(ttl=30)
 def load_balance():
@@ -136,21 +195,18 @@ if page == "포트폴리오":
     total_eval = data.get("total_eval", 0)
     holdings = data.get("holdings", [])
 
-    # 투자금액: INITIAL_CAPITAL 설정 시 해당 값, 미설정 시 cash(예수금)
+    # 투자금액: 대시보드 설정 → 환경변수 → 예수금 순 fallback
+    INITIAL_CAPITAL = _get_initial_capital()
     invested = INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else available_cash
-    # 평가손익 = 현재 총평가 - 투자원금
     profit_loss = total_eval - invested
     pl_rate = round((profit_loss / invested * 100), 2) if invested > 0 else 0.0
 
-    invested_label = "투자금액" if INITIAL_CAPITAL > 0 else "투자금액 *"
-    col1.metric(invested_label, f"₩{invested:,.0f}")
+    col1.metric("투자금액", f"₩{invested:,.0f}")
     col2.metric("예수금", f"₩{available_cash:,.0f}")
     col3.metric("평가금액", f"₩{total_eval:,.0f}")
     col4.metric("평가손익", f"₩{profit_loss:,.0f}", f"{pl_rate:+.2f}%",
                 delta_color="normal" if profit_loss >= 0 else "inverse")
     col5.metric("보유 종목 수", f"{len(holdings)}개")
-    if INITIAL_CAPITAL == 0:
-        st.caption("\\* INITIAL_CAPITAL 환경변수 미설정 — 투자금액 기준이 현재 예수금으로 대체됩니다.")
 
     st.divider()
 
@@ -162,17 +218,19 @@ if page == "포트폴리오":
 
     _runs = get_agent_runs(limit=500)
     if _runs:
+        _ic = _get_initial_capital()
         def _run_pl_rate(r):
             p = r.get("portfolio", {})
             _te = p.get("total_eval", 0) or 0
-            if INITIAL_CAPITAL > 0:
-                return round((_te - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100, 2)
+            if _ic > 0:
+                return round((_te - _ic) / _ic * 100, 2)
             _pl = p.get("profit_loss", 0) or 0
             _hs = p.get("holdings", []) or []
             _he = sum(h.get("current_price", 0) * h.get("quantity", 0) for h in _hs)
             _se = _he if _he > 0 else _te
             _cb = _se - _pl
             return round((_pl / _cb * 100), 2) if _cb > 0 else 0.0
+        del _ic
 
         _rdf = pd.DataFrame([{"ts": r["ts"], "pl_rate": _run_pl_rate(r)} for r in _runs])
         _rdf["ts"] = pd.to_datetime(_rdf["ts"], format='ISO8601', utc=True).dt.tz_convert(KST)
@@ -389,7 +447,6 @@ elif page == "에이전트 로그":
     runs_reversed = list(reversed(runs))
 
     for i, run in enumerate(runs_reversed[:20]):
-        # ISO 형식 문자열을 datetime으로 변환 후 KST로 포맷팅
         raw_ts = run.get("ts", "")
         try:
             dt_ts = pd.to_datetime(raw_ts, utc=True).tz_convert(KST)
@@ -414,7 +471,6 @@ elif page == "에이전트 로그":
             col2.metric("총 평가금액", f"₩{total_eval:,.0f}")
             col3.metric("보유 종목", f"{holdings_count}개")
 
-            # 매수 종목 3분봉 차트 (오늘 실행분만 라이브 조회)
             if buy_tickers:
                 st.markdown("**매수 종목 3분봉 HA 차트**")
                 try:
@@ -438,7 +494,6 @@ elif page == "에이전트 실행":
     st.title("📈 에이전트 실행")
     st.caption("장중: 실제 계좌 + 실제 주문 / 장외: 가상 ₩1,000,000 시뮬레이션")
 
-    # ── 비밀번호 확인 ────────────────────
     pw = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요", key="agent_pw")
     if pw and pw != "1018":
         st.error("비밀번호가 올바르지 않습니다.")
@@ -446,7 +501,6 @@ elif page == "에이전트 실행":
     if not pw:
         st.stop()
 
-    # ── 장중 여부 판단 ────────────────────
     import holidays as hol
     from datetime import time as dtime
 
@@ -461,7 +515,6 @@ elif page == "에이전트 실행":
     LIVE = is_market_open()
 
     # ── 저장소 헬퍼 ────────────────────
-    _GCS_DATA_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
 
     def _load_sim_index() -> list:
         if _GCS_DATA_BUCKET:
@@ -586,7 +639,6 @@ elif page == "에이전트 실행":
                     st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
                     st.code(e["result_preview"], language="json")
 
-    # ══ 섹션 1: 결과 목록 + 인라인 상세 ════════════════════
     st.subheader("📋 실행 결과 목록")
     sim_index = _load_sim_index()
     selected_id = st.session_state.get("selected_sim_id")
@@ -628,7 +680,6 @@ elif page == "에이전트 실행":
 
     st.divider()
 
-    # ══ 섹션 2: 실행 ══════════════════════
     st.subheader("🚀 에이전트 실행")
 
     if LIVE:
@@ -668,7 +719,6 @@ elif page == "에이전트 실행":
             st.rerun()
 
     else:
-        # 로칼 모드: 동기 실행
         run_btn = st.button(run_label, type="primary")
         if run_btn:
             _now = get_now_kst()
