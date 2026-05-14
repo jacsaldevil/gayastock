@@ -20,7 +20,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── 전역 모바일 테이블 CSS ────────────────────────────────
+# ── 전역 모바일 테이블 CSS ────────────────
 st.markdown("""
 <style>
 [data-testid="stMarkdownContainer"] table {
@@ -42,7 +42,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── 사이드바 ──────────────────────────────────────────────
+# ── 사이드바 ──────────────────────────
 st.sidebar.title("📈 gayastock")
 st.sidebar.caption("AI 주식 트레이딩 에이전트")
 page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그", "에이전트 실행"])
@@ -56,17 +56,63 @@ def load_balance():
     except Exception as e:
         return {"error": str(e)}
 
+
+@st.cache_data(ttl=120)
+def _fetch_candles(ticker: str) -> dict:
+    try:
+        return KISBroker().get_minute_candles(ticker)
+    except Exception:
+        return {}
+
+
+def _render_ha_chart(ticker: str, name: str, candle_data: dict):
+    candles = candle_data.get("candles", [])
+    if not candles:
+        st.caption(f"{ticker} 데이터 없음")
+        return
+    vwap = candle_data.get("vwap", 0)
+    dev_pct = candle_data.get("vwap_deviation_pct", 0)
+    times = [c.get("time", str(j)) for j, c in enumerate(candles)]
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=times,
+        open=[c["ha_open"] for c in candles],
+        high=[c["ha_high"] for c in candles],
+        low=[c["ha_low"] for c in candles],
+        close=[c["ha_close"] for c in candles],
+        name="HA",
+        increasing_line_color="#2ecc71",
+        decreasing_line_color="#e74c3c",
+        increasing_fillcolor="#2ecc71",
+        decreasing_fillcolor="#e74c3c",
+    ))
+    if vwap:
+        fig.add_hline(
+            y=vwap, line_color="orange", line_dash="dash",
+            annotation_text=f"VWAP {vwap:,} ({dev_pct:+.1f}%)",
+            annotation_position="bottom right",
+        )
+    fig.update_layout(
+        title=f"{name or ticker} ({ticker}) 3분봉 HA",
+        height=240,
+        margin=dict(t=35, b=20, l=45, r=20),
+        xaxis_rangeslider_visible=False,
+        xaxis_tickangle=-45,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 if refresh:
     st.cache_data.clear()
 
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
 if page == "포트폴리오":
     st.title("포트폴리오 현황")
 
     data = load_balance()
 
     if "error" in data:
-        st.error("잔고 조회에 실패했습니다. API 설정을 확인하세요.")
+        st.error("잊고 조회에 실패했습니다. API 설정을 확인하세요.")
         st.stop()
 
     # 상단 요약 카드
@@ -193,7 +239,7 @@ if page == "포트폴리오":
             fig2.update_layout(yaxis_title="수익률 (%)", margin=dict(t=20, b=20, l=20, r=20), height=300)
             st.plotly_chart(fig2, use_container_width=True)
 
-    # ── 미체결 주문 ────────────────────────────────────────
+    # ── 미체결 주문 ────────────────────
     st.divider()
     st.subheader("⏳ 미체결 주문")
     try:
@@ -213,13 +259,13 @@ if page == "포트폴리오":
             display_pdf.columns = ["구분", "종목코드", "종목명", "주문수량", "체결수량", "미체결수량", "주문가", "주문유형"]
             st.dataframe(display_pdf, use_container_width=True, hide_index=True)
 
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
 elif page == "매매 이력":
     st.title("매매 이력")
 
     tab_kis, tab_agent = st.tabs(["📋 KIS 계좌 체결 이력", "🤖 에이전트 주문 로그"])
 
-    # ── KIS 실계좌 체결 이력 ──────────────────────────────
+    # ── KIS 실계좌 체결 이력 ──────────────
     with tab_kis:
         col_date1, col_date2, col_btn = st.columns([2, 2, 1])
         with col_date1:
@@ -278,7 +324,7 @@ elif page == "매매 이력":
             fig.update_layout(height=300, margin=dict(t=20, b=20, l=20, r=20))
             st.plotly_chart(fig, use_container_width=True)
 
-    # ── 에이전트 주문 로그 ────────────────────────────────
+    # ── 에이전트 주문 로그 ──────────────
     with tab_agent:
         trades = get_trades()
         if not trades:
@@ -306,7 +352,7 @@ elif page == "매매 이력":
             display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
             st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
 elif page == "에이전트 로그":
     def _summary_preview(text: str, max_len: int = 55) -> str:
         for line in text.split('\n'):
@@ -341,22 +387,40 @@ elif page == "에이전트 로그":
         total_eval = portfolio.get("total_eval", 0)
         holdings_count = len(portfolio.get("holdings", []))
 
-        label = f"🤖 {ts_str}  |  {_summary_preview(summary)}  |  잔고: ₩{total_eval:,.0f}"
+        buy_tickers = run.get("buy_tickers", [])
+        buy_badge = f"  |  매수: {', '.join(buy_tickers)}" if buy_tickers else ""
+        label = f"🤖 {ts_str}  |  {_summary_preview(summary)}  |  잔고: ₩{total_eval:,.0f}{buy_badge}"
         with st.expander(label, expanded=(i == 0)):
             col1, col2, col3 = st.columns(3)
             col1.metric("예수금", f"₩{cash:,.0f}")
             col2.metric("총 평가금액", f"₩{total_eval:,.0f}")
             col3.metric("보유 종목", f"{holdings_count}개")
 
+            # 매수 종목 3분봉 차트 (오늘 실행분만 라이브 조회)
+            if buy_tickers:
+                st.markdown("**매수 종목 3분봉 HA 차트**")
+                try:
+                    is_today = dt_ts.date() == get_now_kst().date()
+                    if is_today:
+                        chart_cols = st.columns(min(len(buy_tickers), 2))
+                        for j, ticker in enumerate(buy_tickers):
+                            with chart_cols[j % 2]:
+                                candle_data = _fetch_candles(ticker)
+                                _render_ha_chart(ticker, "", candle_data)
+                    else:
+                        st.caption(f"매수 종목: {', '.join(buy_tickers)}  (과거 데이터 — 차트 생략)")
+                except Exception as e:
+                    st.caption(f"차트 조회 오류: {e}")
+
             st.markdown("**에이전트 판단 요약**")
             st.markdown(summary)
 
-# ══════════════════════════════════════════════════════════
+# ════════════════════════════════════════════════════════
 elif page == "에이전트 실행":
     st.title("📈 에이전트 실행")
     st.caption("장중: 실제 계좌 + 실제 주문 / 장외: 가상 ₩1,000,000 시뮬레이션")
 
-    # ── 비밀번호 확인 ──────────────────────────────────────
+    # ── 비밀번호 확인 ────────────────────
     pw = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요", key="agent_pw")
     if pw and pw != "1018":
         st.error("비밀번호가 올바르지 않습니다.")
@@ -364,7 +428,7 @@ elif page == "에이전트 실행":
     if not pw:
         st.stop()
 
-    # ── 장중 여부 판단 ─────────────────────────────────────
+    # ── 장중 여부 판단 ────────────────────
     import holidays as hol
     from datetime import time as dtime
 
@@ -378,7 +442,7 @@ elif page == "에이전트 실행":
 
     LIVE = is_market_open()
 
-    # ── 저장소 헬퍼 ───────────────────────────────────────
+    # ── 저장소 헬퍼 ────────────────────
     _GCS_DATA_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
 
     def _load_sim_index() -> list:
@@ -546,7 +610,7 @@ elif page == "에이전트 실행":
 
     st.divider()
 
-    # ══ 섹션 2: 실행 ══════════════════════════════════════
+    # ══ 섹션 2: 실행 ══════════════════════
     st.subheader("🚀 에이전트 실행")
 
     if LIVE:
@@ -586,7 +650,7 @@ elif page == "에이전트 실행":
             st.rerun()
 
     else:
-        # 로컬 모드: 동기 실행
+        # 로칼 모드: 동기 실행
         run_btn = st.button(run_label, type="primary")
         if run_btn:
             _now = get_now_kst()

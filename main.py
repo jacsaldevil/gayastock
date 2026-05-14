@@ -60,6 +60,7 @@ def run_trading():
 
     from agent.trader import TradingAgent
     from agent.tools import _broker
+    from data.trade_log import log_agent_run
     from config import (
         TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
         INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
@@ -76,6 +77,9 @@ def run_trading():
         "  [DRY-RUN]" if dry_run else "",
     )
 
+    summaries: list[str] = []
+    all_buy_tickers: list[str] = []
+
     for i in range(INNER_LOOP_COUNT):
         logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
 
@@ -90,7 +94,11 @@ def run_trading():
                 needs_action = True
 
         if needs_action:
-            result = agent.run(cancel_pending=(i == 0))
+            result = agent.run(cancel_pending=(i == 0), skip_log=True)
+            summaries.append(result)
+            for t in agent.buy_tickers:
+                if t not in all_buy_tickers:
+                    all_buy_tickers.append(t)
             logger.info("에이전트 결과:\n%s", result)
             if i == 0:
                 print("\n" + "=" * 60)
@@ -102,6 +110,15 @@ def run_trading():
         if i < INNER_LOOP_COUNT - 1:
             logger.info("%d초 대기 중...", INNER_LOOP_SLEEP_SEC)
             time.sleep(INNER_LOOP_SLEEP_SEC)
+
+    # 세션 전체(루프 4회)를 하나의 로그 엔트리로 기록
+    if summaries:
+        combined = "\n\n---\n\n".join(summaries)
+        try:
+            portfolio_snapshot = broker.get_balance()
+        except Exception:
+            portfolio_snapshot = agent.sim_portfolio_out or {}
+        log_agent_run(None, combined, portfolio_snapshot, buy_tickers=all_buy_tickers)
 
     logger.info("=" * 60)
 

@@ -94,8 +94,10 @@ class TradingAgent:
         sim_datetime: datetime | None = None,
         sim_portfolio_in: dict | None = None,
         cancel_pending: bool = True,
+        skip_log: bool = False,
     ) -> str:
         self.tool_call_log = []
+        self.buy_tickers: list[str] = []
         self.sim_portfolio_out: dict | None = None
         set_sim_portfolio(sim_portfolio_in)
 
@@ -134,7 +136,8 @@ class TradingAgent:
             except Exception as e:
                 error_msg = f"Gemini API 초기 호출 실패: {e}"
                 logger.error(error_msg)
-                log_agent_run(watchlist, error_msg, {})
+                if not skip_log:
+                    log_agent_run(watchlist, error_msg, {})
                 return error_msg
 
             for i in range(MAX_TOOL_ROUNDS):
@@ -176,7 +179,8 @@ class TradingAgent:
                 except Exception as e:
                     error_msg = f"에이전트 루프 중 오류 발생 ({i+1}라운드): {e}"
                     logger.error(error_msg)
-                    log_agent_run(watchlist, error_msg, {})
+                    if not skip_log:
+                        log_agent_run(watchlist, error_msg, {})
                     return error_msg
 
             try:
@@ -186,11 +190,18 @@ class TradingAgent:
                 final = "분석 완료 (도구 호출 한도 도달 — 최종 텍스트 응답 없음)"
             logger.info("에이전트 완료")
 
-            try:
-                portfolio_snapshot = _broker().get_balance()
-            except Exception:
-                portfolio_snapshot = {}
-            log_agent_run(watchlist, final, portfolio_snapshot)
+            self.buy_tickers = list(dict.fromkeys(
+                t["args"].get("ticker", "")
+                for t in self.tool_call_log
+                if t["tool"] == "buy_stock" and t["args"].get("ticker")
+            ))
+
+            if not skip_log:
+                try:
+                    portfolio_snapshot = _broker().get_balance()
+                except Exception:
+                    portfolio_snapshot = {}
+                log_agent_run(watchlist, final, portfolio_snapshot, buy_tickers=self.buy_tickers)
             return final
 
         finally:

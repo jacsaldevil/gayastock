@@ -1,4 +1,4 @@
-"""매매 이력 및 에이전트 판단 로그를 GCS(운영) / 로컬 JSONL(개발)로 저장/조회"""
+"""매매 이력 및 에이전트 판단 로그를 GCS(운영) / 로칼 JSONL(개발)로 저장/조회"""
 import json
 import logging
 import os
@@ -11,13 +11,13 @@ _LOG_DIR = os.getenv("LOG_DIR", "logs")
 TRADE_LOG_FILE = os.path.join(_LOG_DIR, "trades.jsonl")
 AGENT_LOG_FILE = os.path.join(_LOG_DIR, "agent_runs.jsonl")
 
-# GCS_DATA_BUCKET 환경변수가 있으면 GCS 사용, 없으면 로컬 파일
+# GCS_DATA_BUCKET 환경변수가 있으면 GCS 사용, 없으면 로칼 파일
 _GCS_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
 _TRADE_BLOB = "logs/trades.jsonl"
 _AGENT_BLOB = "logs/agent_runs.jsonl"
 
 
-# ── GCS 헬퍼 ──────────────────────────────────────────────
+# ── GCS 헬퍼 ────────────────────────────
 
 def _gcs_read_lines(blob_name: str) -> list[str]:
     try:
@@ -47,7 +47,7 @@ def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None):
         logger.warning("GCS 쓰기 실패 (%s): %s", blob_name, e)
 
 
-# ── 로컬 파일 헬퍼 ────────────────────────────────────────
+# ── 로칼 파일 헬퍼 ────────────────────
 
 def _local_append(filepath: str, line: str, max_records: int | None = None):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
@@ -69,7 +69,7 @@ def _local_read_lines(filepath: str) -> list[str]:
         return f.read().splitlines()
 
 
-# ── 공통 ─────────────────────────────────────────────────
+# ── 공통 ─────────────────────────
 
 def _append(blob_name: str, filepath: str, record: dict, max_records: int | None = None):
     line = json.dumps(record, ensure_ascii=False)
@@ -92,7 +92,7 @@ def _read_all(blob_name: str, filepath: str) -> list[dict]:
     return records
 
 
-# ── 공개 API ─────────────────────────────────────────────
+# ── 공개 API ───────────────────────
 
 _MAX_TRADE_RECORDS = 1000    # 매매 로그 최대 보존 건수
 _MAX_AGENT_RECORDS = 500     # 에이전트 실행 로그 최대 보존 건수 (20회/일 × 25일)
@@ -112,12 +112,13 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
     }, max_records=_MAX_TRADE_RECORDS)
 
 
-def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict):
+def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict, buy_tickers: list = None):
     _append(_AGENT_BLOB, AGENT_LOG_FILE, {
         "ts": get_now_kst().isoformat(),
         "watchlist": watchlist,
         "summary": summary,
         "portfolio": portfolio_snapshot,
+        "buy_tickers": buy_tickers or [],
     }, max_records=_MAX_AGENT_RECORDS)
 
 
