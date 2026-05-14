@@ -15,6 +15,21 @@ from data.financial import _get_broker as _get_kis_broker
 from data.trade_log import get_trades, get_agent_runs
 from config import INITIAL_CAPITAL
 
+
+def _get_sim_datetime(live: bool):
+    """장외 시뮬 실행 시 1회차 조건 강제, 장중이면 None(실제 시각)"""
+    if live:
+        return None
+    from agent.trader import _SCHEDULE_SLOTS
+    from datetime import datetime as _dt, time as _dtime
+    now_kst = get_now_kst()
+    if _dtime(9, 0) <= now_kst.time() <= _dtime(15, 30):
+        return None
+    first_slot = _SCHEDULE_SLOTS[0][0]
+    return _dt(now_kst.year, now_kst.month, now_kst.day,
+               first_slot.hour, first_slot.minute,
+               tzinfo=now_kst.tzinfo)
+
 st.set_page_config(
     page_title="gayastock 대시보드",
     page_icon="📈",
@@ -121,18 +136,21 @@ if page == "포트폴리오":
     total_eval = data.get("total_eval", 0)
     holdings = data.get("holdings", [])
 
-    # 투자금액: INITIAL_CAPITAL 설정 시 해당 값, 미설정 시 total_eval
-    invested = INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else total_eval
+    # 투자금액: INITIAL_CAPITAL 설정 시 해당 값, 미설정 시 cash(예수금)
+    invested = INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else available_cash
     # 평가손익 = 현재 총평가 - 투자원금
     profit_loss = total_eval - invested
     pl_rate = round((profit_loss / invested * 100), 2) if invested > 0 else 0.0
 
-    col1.metric("투자금액", f"₩{invested:,.0f}")
+    invested_label = "투자금액" if INITIAL_CAPITAL > 0 else "투자금액 *"
+    col1.metric(invested_label, f"₩{invested:,.0f}")
     col2.metric("예수금", f"₩{available_cash:,.0f}")
     col3.metric("평가금액", f"₩{total_eval:,.0f}")
     col4.metric("평가손익", f"₩{profit_loss:,.0f}", f"{pl_rate:+.2f}%",
                 delta_color="normal" if profit_loss >= 0 else "inverse")
     col5.metric("보유 종목 수", f"{len(holdings)}개")
+    if INITIAL_CAPITAL == 0:
+        st.caption("\\* INITIAL_CAPITAL 환경변수 미설정 — 투자금액 기준이 현재 예수금으로 대체됩니다.")
 
     st.divider()
 
@@ -535,7 +553,7 @@ elif page == "에이전트 실행":
         try:
             from agent.trader import TradingAgent
             agent = TradingAgent()
-            result = agent.run([], sim_datetime=None, sim_portfolio_in=None)
+            result = agent.run([], sim_datetime=_get_sim_datetime(live), sim_portfolio_in=None)
             data["results"]["분석"] = {"result": result, "tool_log": agent.tool_call_log}
             _write(data)
         except Exception as e:
@@ -663,7 +681,7 @@ elif page == "에이전트 실행":
             try:
                 from agent.trader import TradingAgent
                 agent = TradingAgent()
-                result_text = agent.run([], sim_datetime=None, sim_portfolio_in=None)
+                result_text = agent.run([], sim_datetime=_get_sim_datetime(LIVE), sim_portfolio_in=None)
                 tool_log = agent.tool_call_log
                 progress.progress(1.0, text="✅ 완료!")
             except Exception as e:
