@@ -11,7 +11,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from broker.kis import KISBroker
+from data.financial import _get_broker as _get_kis_broker
 from data.trade_log import get_trades, get_agent_runs
 from config import INITIAL_CAPITAL
 
@@ -52,8 +52,7 @@ refresh = st.sidebar.button("🔄 새로고침")
 @st.cache_data(ttl=30)
 def load_balance():
     try:
-        broker = KISBroker()
-        return broker.get_balance()
+        return _get_kis_broker().get_balance()
     except Exception as e:
         return {"error": str(e)}
 
@@ -61,7 +60,7 @@ def load_balance():
 @st.cache_data(ttl=120)
 def _fetch_candles(ticker: str) -> dict:
     try:
-        return KISBroker().get_minute_candles(ticker)
+        return _get_kis_broker().get_minute_candles(ticker)
     except Exception:
         return {}
 
@@ -245,7 +244,7 @@ if page == "포트폴리오":
     st.divider()
     st.subheader("⏳ 미체결 주문")
     try:
-        pending = KISBroker().get_pending_orders()
+        pending = _get_kis_broker().get_pending_orders()
     except Exception as e:
         pending = None
         st.warning(f"미체결 조회 실패: {e}")
@@ -281,8 +280,7 @@ elif page == "매매 이력":
         @st.cache_data(ttl=60)
         def load_order_history(start: str, end: str):
             try:
-                broker = KISBroker()
-                return broker.get_order_history(start, end)
+                return _get_kis_broker().get_order_history(start, end)
             except Exception as e:
                 return {"error": str(e)}
 
