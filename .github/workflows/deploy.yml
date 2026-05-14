@@ -3,17 +3,13 @@ name: Deploy to Google Cloud Run
 on:
   push:
     branches: [main]
-  workflow_dispatch:
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   REGION: asia-northeast3
   REGISTRY: asia-northeast3-docker.pkg.dev
-  AR_REPO: gayastock
   DASHBOARD_SERVICE: gayastock-dashboard
   AGENT_JOB: gayastock-agent
-  SECRETS_FLAGS: "KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
-  ENV_FLAGS: "KIS_MOCK=false,MAX_BUY_AMOUNT=500000,MAX_POSITIONS=5,GCP_PROJECT_ID=${{ secrets.GCP_PROJECT_ID }},GCP_REGION=asia-northeast3,GCS_TOKEN_BUCKET=gayastock-token-cache-${{ secrets.GCP_PROJECT_ID }},GCS_DATA_BUCKET=gayastock-data-${{ secrets.GCP_PROJECT_ID }}"
 
 jobs:
   deploy:
@@ -24,83 +20,62 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud (WIF)
+      - id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
 
-      - name: Setup gcloud CLI
-        uses: google-github-actions/setup-gcloud@v2
+      - uses: google-github-actions/setup-gcloud@v2
 
       - name: Grant Vertex AI permission to runner SA
         run: |
           SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
           gcloud projects add-iam-policy-binding $PROJECT_ID \
             --member="serviceAccount:$SA" \
-            --role="roles/aiplatform.user" \
-            --condition=None \
-            --quiet 2>/dev/null || true
+            --role="roles/aiplatform.user" --quiet 2>/dev/null || true
 
-      - name: Ensure GCS buckets exist
+      - name: Grant Secret Manager accessor
         run: |
           SA="serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
+          for SECRET in KIS_APP_KEY KIS_APP_SECRET KIS_ACCOUNT_NO; do
+            gcloud secrets add-iam-policy-binding $SECRET \
+              --member="$SA" --role="roles/secretmanager.secretAccessor" \
+              --project=$PROJECT_ID --quiet 2>/dev/null || true
+          done
 
-          TOKEN_BUCKET="gayastock-token-cache-$PROJECT_ID"
-          if ! gcloud storage buckets describe gs://$TOKEN_BUCKET --quiet 2>/dev/null; then
-            gcloud storage buckets create gs://$TOKEN_BUCKET \
-              --location=$REGION --uniform-bucket-level-access
-            gcloud storage buckets add-iam-policy-binding gs://$TOKEN_BUCKET \
-              --member="$SA" --role="roles/storage.objectAdmin"
-          fi
-
-          DATA_BUCKET="gayastock-data-$PROJECT_ID"
-          if ! gcloud storage buckets describe gs://$DATA_BUCKET --quiet 2>/dev/null; then
-            gcloud storage buckets create gs://$DATA_BUCKET \
-              --location=$REGION --uniform-bucket-level-access
-            gcloud storage buckets add-iam-policy-binding gs://$DATA_BUCKET \
-              --member="$SA" --role="roles/storage.objectAdmin"
-          fi
-
-      - name: Configure Docker for Artifact Registry
+      - name: Configure Docker
         run: gcloud auth configure-docker $REGISTRY --quiet
 
-      - name: Build & Push Dashboard
+      - name: Build & Push image
         run: |
-          IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$DASHBOARD_SERVICE
+          IMAGE="$REGISTRY/$PROJECT_ID/gayastock/app"
           docker build -t $IMAGE:$GITHUB_SHA -t $IMAGE:latest .
           docker push $IMAGE:$GITHUB_SHA
           docker push $IMAGE:latest
 
       - name: Deploy Dashboard to Cloud Run
         run: |
-          IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$DASHBOARD_SERVICE
+          IMAGE="$REGISTRY/$PROJECT_ID/gayastock/app"
+          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=${{ secrets.GCS_DATA_BUCKET }}"
+          SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           gcloud run deploy $DASHBOARD_SERVICE \
-            --image $IMAGE:$GITHUB_SHA \
-            --platform managed \
-            --region $REGION \
-            --allow-unauthenticated \
+            --image $IMAGE:$GITHUB_SHA --region $REGION \
+            --platform managed --allow-unauthenticated \
             --memory 512Mi \
             --cpu 1 \
             --min-instances 0 \
             --max-instances 2 \
             --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com \
-            --set-env-vars "$ENV_FLAGS" \
-            --set-secrets "$SECRETS_FLAGS"
-
-      - name: Build & Push Agent
-        run: |
-          IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$AGENT_JOB
-          docker build -f Dockerfile.agent -t $IMAGE:$GITHUB_SHA -t $IMAGE:latest .
-          docker push $IMAGE:$GITHUB_SHA
-          docker push $IMAGE:latest
+            --set-env-vars "$ENV_FLAGS" --set-secrets "$SECRETS_FLAGS" --quiet
 
       - name: Update Cloud Run Job (Agent)
         run: |
-          IMAGE=$REGISTRY/$PROJECT_ID/$AR_REPO/$AGENT_JOB
+          IMAGE="$REGISTRY/$PROJECT_ID/gayastock/app"
+          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=${{ secrets.GCS_DATA_BUCKET }},LOG_DIR=/tmp/logs"
+          SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 600 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
           if gcloud run jobs describe $AGENT_JOB --region $REGION --quiet 2>/dev/null; then
             gcloud run jobs update $AGENT_JOB $COMMON_FLAGS
@@ -126,25 +101,25 @@ jobs:
 
           declare -A SCHEDULES=(
             ["${AGENT_JOB}-run01"]="20 9  * * 1-5"
-            ["${AGENT_JOB}-run02"]="37 9  * * 1-5"
-            ["${AGENT_JOB}-run03"]="54 9  * * 1-5"
-            ["${AGENT_JOB}-run04"]="11 10 * * 1-5"
-            ["${AGENT_JOB}-run05"]="28 10 * * 1-5"
-            ["${AGENT_JOB}-run06"]="45 10 * * 1-5"
-            ["${AGENT_JOB}-run07"]="2  11 * * 1-5"
-            ["${AGENT_JOB}-run08"]="19 11 * * 1-5"
-            ["${AGENT_JOB}-run09"]="36 11 * * 1-5"
-            ["${AGENT_JOB}-run10"]="53 11 * * 1-5"
-            ["${AGENT_JOB}-run11"]="10 12 * * 1-5"
-            ["${AGENT_JOB}-run12"]="27 12 * * 1-5"
-            ["${AGENT_JOB}-run13"]="44 12 * * 1-5"
-            ["${AGENT_JOB}-run14"]="1  13 * * 1-5"
-            ["${AGENT_JOB}-run15"]="18 13 * * 1-5"
-            ["${AGENT_JOB}-run16"]="35 13 * * 1-5"
-            ["${AGENT_JOB}-run17"]="52 13 * * 1-5"
-            ["${AGENT_JOB}-run18"]="9  14 * * 1-5"
-            ["${AGENT_JOB}-run19"]="26 14 * * 1-5"
-            ["${AGENT_JOB}-run20"]="10 15 * * 1-5"
+            ["${AGENT_JOB}-run02"]="31 9  * * 1-5"
+            ["${AGENT_JOB}-run03"]="42 9  * * 1-5"
+            ["${AGENT_JOB}-run04"]="53 9  * * 1-5"
+            ["${AGENT_JOB}-run05"]="4  10 * * 1-5"
+            ["${AGENT_JOB}-run06"]="15 10 * * 1-5"
+            ["${AGENT_JOB}-run07"]="26 10 * * 1-5"
+            ["${AGENT_JOB}-run08"]="37 10 * * 1-5"
+            ["${AGENT_JOB}-run09"]="48 10 * * 1-5"
+            ["${AGENT_JOB}-run10"]="59 10 * * 1-5"
+            ["${AGENT_JOB}-run11"]="10 11 * * 1-5"
+            ["${AGENT_JOB}-run12"]="21 11 * * 1-5"
+            ["${AGENT_JOB}-run13"]="32 11 * * 1-5"
+            ["${AGENT_JOB}-run14"]="43 11 * * 1-5"
+            ["${AGENT_JOB}-run15"]="54 11 * * 1-5"
+            ["${AGENT_JOB}-run16"]="5  12 * * 1-5"
+            ["${AGENT_JOB}-run17"]="16 12 * * 1-5"
+            ["${AGENT_JOB}-run18"]="27 12 * * 1-5"
+            ["${AGENT_JOB}-run19"]="38 12 * * 1-5"
+            ["${AGENT_JOB}-run20"]="0  13 * * 1-5"
           )
 
           for JOB_NAME in "${!SCHEDULES[@]}"; do
@@ -155,8 +130,3 @@ jobs:
               gcloud scheduler jobs create http "$JOB_NAME" $FLAGS --schedule "$CRON"
             fi
           done
-
-      - name: Deployment summary
-        run: |
-          URL=$(gcloud run services describe $DASHBOARD_SERVICE --region $REGION --format "value(status.url)")
-          echo "✅ 배포 완료 — 대시보드: $URL"
