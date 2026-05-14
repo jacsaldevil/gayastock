@@ -13,6 +13,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from broker.kis import KISBroker
 from data.trade_log import get_trades, get_agent_runs
+from config import INITIAL_CAPITAL
 
 st.set_page_config(
     page_title="gayastock 대시보드",
@@ -112,21 +113,20 @@ if page == "포트폴리오":
     data = load_balance()
 
     if "error" in data:
-        st.error("잊고 조회에 실패했습니다. API 설정을 확인하세요.")
+        st.error("잔고 조회에 실패했습니다. API 설정을 확인하세요.")
         st.stop()
 
     # 상단 요약 카드
     col1, col2, col3, col4, col5 = st.columns(5)
-    invested = data.get("cash", 0)       # KIS dnca_tot_amt = 원금(총 입금액)
+    available_cash = data.get("cash", 0)   # dnca_tot_amt = 현재 예수금(가용현금)
     total_eval = data.get("total_eval", 0)
-    profit_loss = data.get("profit_loss", 0)
     holdings = data.get("holdings", [])
 
-    holding_eval = sum(h["current_price"] * h["quantity"] for h in holdings)
-    available_cash = total_eval - holding_eval   # 실제 가용 예수금
-    securities_eval = holding_eval if holding_eval > 0 else total_eval
-    cost_basis = securities_eval - profit_loss
-    pl_rate = round((profit_loss / cost_basis * 100), 2) if cost_basis > 0 else 0.0
+    # 투자금액: INITIAL_CAPITAL 설정 시 해당 값, 미설정 시 total_eval
+    invested = INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else total_eval
+    # 평가손익 = 현재 총평가 - 투자원금
+    profit_loss = total_eval - invested
+    pl_rate = round((profit_loss / invested * 100), 2) if invested > 0 else 0.0
 
     col1.metric("투자금액", f"₩{invested:,.0f}")
     col2.metric("예수금", f"₩{available_cash:,.0f}")
@@ -147,8 +147,10 @@ if page == "포트폴리오":
     if _runs:
         def _run_pl_rate(r):
             p = r.get("portfolio", {})
-            _pl = p.get("profit_loss", 0) or 0
             _te = p.get("total_eval", 0) or 0
+            if INITIAL_CAPITAL > 0:
+                return round((_te - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100, 2)
+            _pl = p.get("profit_loss", 0) or 0
             _hs = p.get("holdings", []) or []
             _he = sum(h.get("current_price", 0) * h.get("quantity", 0) for h in _hs)
             _se = _he if _he > 0 else _te
@@ -207,7 +209,7 @@ if page == "포트폴리오":
             return color
 
         st.dataframe(
-            df[display_cols].style.map(color_pl, subset=["수익률(%)"]).format({
+            df[display_cols].style.map(color_pl, subset=["수익률(%)"])  .format({
                 "평균단가": "{:,.0f}",
                 "현재가": "{:,.0f}",
                 "수익률(%)": "{:+.2f}%",
