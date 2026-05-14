@@ -192,8 +192,10 @@ if page == "포트폴리오":
     # 상단 요약 카드
     col1, col2, col3, col4, col5 = st.columns(5)
     available_cash = data.get("cash", 0)   # dnca_tot_amt = 현재 예수금(가용현금)
-    total_eval = data.get("total_eval", 0)
     holdings = data.get("holdings", [])
+    # 평가금액 = 예수금 + 보유주식평가 (직접 계산, KIS tot_evlu_amt는 D+2 미결제 포함으로 차이 발생)
+    holding_eval = sum(h["current_price"] * h["quantity"] for h in holdings)
+    total_eval = available_cash + holding_eval
 
     # 투자금액: 대시보드 설정 → 환경변수 → 예수금 순 fallback
     INITIAL_CAPITAL = _get_initial_capital()
