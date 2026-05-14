@@ -28,7 +28,7 @@ def _load_settings() -> dict:
                 return json.loads(blob.download_as_text())
         except Exception:
             pass
-    # 로컬 fallback
+    # 로컈 fallback
     try:
         with open(".dashboard_settings.json", encoding="utf-8") as f:
             return json.load(f)
