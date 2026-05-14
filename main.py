@@ -1,8 +1,7 @@
 """
-gayastock - 재무제표 기반 국내 주식 트레이딩 에이전트
-실행: python main.py
-      python main.py --once        # 1회 즉시 실행
-      python main.py --tickers 005930 000660  # 특정 종목만
+gayastock - 거래량 모멘텀 + VWAP 국내 주식 트레이딩 에이전트
+실행: python main.py --once        # 1회 즉시 실행 (내부 루프 포함)
+      python main.py --dry-run     # 시뮬레이션 모드
 """
 import argparse
 import logging
@@ -10,7 +9,6 @@ import os
 import time
 from data.utils import get_now_kst
 
-# 로깅 시간대를 KST로 설정
 logging.Formatter.converter = lambda *args: get_now_kst().timetuple()
 
 _log_dir = os.environ.get("LOG_DIR", "logs")
@@ -26,38 +24,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# KOSPI 우량주 20종목 — 8개 섹터 분산
-DEFAULT_WATCHLIST = [
-    # 반도체/전자
-    "005930",  # 삼성전자
-    "000660",  # SK하이닉스
-    "066570",  # LG전자
-    # 인터넷/플랫폼
-    "035420",  # NAVER
-    "035720",  # 카카오
-    # 자동차
-    "005380",  # 현대차
-    "000270",  # 기아
-    "012330",  # 현대모비스
-    # 2차전지/화학
-    "373220",  # LG에너지솔루션
-    "006400",  # 삼성SDI
-    "051910",  # LG화학
-    # 철강/소재
-    "005490",  # POSCO홀딩스
-    "010130",  # 고려아연
-    # 금융
-    "105560",  # KB금융
-    "055550",  # 신한지주
-    "086790",  # 하나금융지주
-    # 바이오
-    "207940",  # 삼성바이오로직스
-    "068270",  # 셀트리온
-    # 통신/지주
-    "017670",  # SK텔레콤
-    "028260",  # 삼성물산
-]
-
 
 def is_trading_day() -> bool:
     import holidays
@@ -68,58 +34,100 @@ def is_trading_day() -> bool:
     return today not in kr_holidays
 
 
-def run_trading(watchlist: list[str]):
+def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float, max_positions: int) -> bool:
+    """Python 사전 체크: TP/SL 조건 또는 빈 슬롯 여부. True면 Gemini 호출 필요."""
+    portfolio = broker.get_balance()
+    holdings = portfolio.get("holdings", [])
+
+    for h in holdings:
+        rate = h.get("profit_loss_rate", 0)
+        if rate >= take_profit_pct or rate <= -stop_loss_pct:
+            logger.info("TP/SL 조건 해당: %s %.2f%% → Gemini 호출", h.get("ticker"), rate)
+            return True
+
+    if len(holdings) < max_positions:
+        logger.info("빈 슬롯 있음 (%d/%d) → Gemini 호출", len(holdings), max_positions)
+        return True
+
+    logger.info("포지션 풀, TP/SL 없음 → Gemini 스킵")
+    return False
+
+
+def run_trading():
     if not is_trading_day():
         logger.info("오늘은 휴장일(공휴일/주말)입니다. 건너뜁니다.")
         return
+
     from agent.trader import TradingAgent
+    from agent.tools import _broker
+    from config import (
+        TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
+        INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
+    )
+
     dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     agent = TradingAgent()
+    broker = _broker()
+
     logger.info("=" * 60)
-    logger.info(f"트레이딩 세션 시작{'  [DRY-RUN 시뮬레이션]' if dry_run else ''}")
-    result = agent.run(watchlist)
-    logger.info("에이전트 판단 결과:\n" + result)
+    logger.info(
+        "트레이딩 세션 시작 — 루프 %d회 / 슬립 %d초%s",
+        INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
+        "  [DRY-RUN]" if dry_run else "",
+    )
+
+    for i in range(INNER_LOOP_COUNT):
+        logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
+
+        # dry-run은 sim 포트폴리오를 agent가 관리하므로 항상 호출
+        if dry_run:
+            needs_action = True
+        else:
+            try:
+                needs_action = _check_needs_action(broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS)
+            except Exception as e:
+                logger.warning("사전 체크 오류 (Gemini 폴백): %s", e)
+                needs_action = True
+
+        if needs_action:
+            result = agent.run(cancel_pending=(i == 0))
+            logger.info("에이전트 결과:\n%s", result)
+            if i == 0:
+                print("\n" + "=" * 60)
+                if dry_run:
+                    print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
+                print(result)
+                print("=" * 60)
+
+        if i < INNER_LOOP_COUNT - 1:
+            logger.info("%d초 대기 중...", INNER_LOOP_SLEEP_SEC)
+            time.sleep(INNER_LOOP_SLEEP_SEC)
+
     logger.info("=" * 60)
-    print("\n" + "=" * 60)
-    if dry_run:
-        print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
-    print(result)
-    print("=" * 60)
 
 
 def main():
     parser = argparse.ArgumentParser(description="gayastock 트레이딩 에이전트")
     parser.add_argument("--once", action="store_true", help="1회 즉시 실행 후 종료")
     parser.add_argument("--dry-run", action="store_true", help="시뮬레이션 모드 (실제 주문 없음)")
-    parser.add_argument("--tickers", nargs="+", help="분석할 종목코드 목록")
     args = parser.parse_args()
 
     if args.dry_run:
         os.environ["DRY_RUN"] = "true"
         logger.info("DRY-RUN 모드 활성화 — 실제 주문이 실행되지 않습니다.")
 
-    watchlist = args.tickers if args.tickers else DEFAULT_WATCHLIST
-
     if args.once:
-        run_trading(watchlist)
+        run_trading()
         return
 
-    logger.info(f"스케줄러 시작 (KST 09:10, 12:00, 14:30 실행) | 관심종목: {len(watchlist)}종목")
-    
+    logger.info("스케줄러 모드 — Cloud Run Job 방식 권장, 직접 루프는 개발용")
     last_run_id = ""
     while True:
         now_kst = get_now_kst()
-        current_time = now_kst.strftime("%H:%M")
-        current_date = now_kst.strftime("%Y-%m-%d")
-        
-        # 09:10 장 시작 / 12:00 점심 / 14:30 마감 1시간 전 — 하루 3회
-        if current_time in ["09:10", "12:00", "14:30"]:
-            # 같은 날 같은 시간에 중복 실행 방지
-            run_id = f"{current_date} {current_time}"
-            if last_run_id != run_id:
-                run_trading(watchlist)
-                last_run_id = run_id
-        
+        run_id = now_kst.strftime("%Y-%m-%d %H:%M")
+        if last_run_id != run_id and now_kst.minute % 11 == 0:
+            run_trading()
+            last_run_id = run_id
         time.sleep(30)
 
 

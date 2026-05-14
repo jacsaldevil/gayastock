@@ -25,3 +25,7 @@ MAX_BUY_AMOUNT = int(os.getenv("MAX_BUY_AMOUNT", "500000"))
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "5"))
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "4.0"))
 STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "2.5"))
+
+# 내부 루프 설정 (스케줄러 1회 호출당 반복 횟수 / 슬립)
+INNER_LOOP_COUNT = int(os.getenv("INNER_LOOP_COUNT", "4"))
+INNER_LOOP_SLEEP_SEC = int(os.getenv("INNER_LOOP_SLEEP_SEC", "90"))  # 1.5분

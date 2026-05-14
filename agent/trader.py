@@ -90,17 +90,18 @@ class TradingAgent:
 
     def run(
         self,
-        watchlist: list[str],
+        watchlist: list[str] = None,
         sim_datetime: datetime | None = None,
         sim_portfolio_in: dict | None = None,
+        cancel_pending: bool = True,
     ) -> str:
         self.tool_call_log = []
         self.sim_portfolio_out: dict | None = None
         set_sim_portfolio(sim_portfolio_in)
 
         try:
-            # 실전 모드에서만 미체결 주문 전량 취소 후 시작
-            if os.environ.get("DRY_RUN", "false").lower() != "true":
+            # 실전 모드 + 첫 루프에서만 미체결 주문 전량 취소
+            if cancel_pending and os.environ.get("DRY_RUN", "false").lower() != "true":
                 try:
                     cancelled = _broker().cancel_all_pending_orders()
                     if cancelled:
