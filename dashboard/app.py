@@ -11,9 +11,69 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-from broker.kis import KISBroker
+from data.financial import _get_broker as _get_kis_broker
 from data.trade_log import get_trades, get_agent_runs
-from config import INITIAL_CAPITAL
+from config import INITIAL_CAPITAL as _INITIAL_CAPITAL_ENV
+
+_GCS_DATA_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
+_SETTINGS_BLOB = "settings.json"
+
+
+def _load_settings() -> dict:
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
+            if blob.exists():
+                return json.loads(blob.download_as_text())
+        except Exception:
+            pass
+    # 로컈 fallback
+    try:
+        with open(".dashboard_settings.json", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_settings(data: dict):
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
+            blob.upload_from_string(json.dumps(data), content_type="application/json")
+            return
+        except Exception:
+            pass
+    try:
+        with open(".dashboard_settings.json", "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
+def _get_initial_capital() -> int:
+    """GCS 설정 → 환경변수 순으로 투자금액 반환"""
+    settings = _load_settings()
+    val = settings.get("initial_capital", 0)
+    if val > 0:
+        return val
+    return _INITIAL_CAPITAL_ENV
+
+
+def _get_sim_datetime(live: bool):
+    """장외 시뮬 실행 시 1회차 조건 강제, 장중이면 None(실제 시각)"""
+    if live:
+        return None
+    from agent.trader import _SCHEDULE_SLOTS
+    from datetime import datetime as _dt, time as _dtime
+    now_kst = get_now_kst()
+    if _dtime(9, 0) <= now_kst.time() <= _dtime(15, 30):
+        return None
+    first_slot = _SCHEDULE_SLOTS[0][0]
+    return _dt(now_kst.year, now_kst.month, now_kst.day,
+               first_slot.hour, first_slot.minute,
+               tzinfo=now_kst.tzinfo)
 
 st.set_page_config(
     page_title="gayastock 대시보드",
@@ -49,11 +109,24 @@ st.sidebar.caption("AI 주식 트레이딩 에이전트")
 page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그", "에이전트 실행"])
 refresh = st.sidebar.button("🔄 새로고침")
 
+st.sidebar.divider()
+st.sidebar.markdown("**💰 투자금액 설정**")
+_cur_capital = _get_initial_capital()
+_new_capital = st.sidebar.number_input(
+    "투자 원금 (원)", min_value=0, step=10000,
+    value=_cur_capital, format="%d",
+    help="0이면 현재 예수금 기준으로 표시됩니다.",
+    label_visibility="collapsed",
+)
+if st.sidebar.button("저장", use_container_width=True):
+    _save_settings({"initial_capital": int(_new_capital)})
+    st.cache_data.clear()
+    st.rerun()
+
 @st.cache_data(ttl=30)
 def load_balance():
     try:
-        broker = KISBroker()
-        return broker.get_balance()
+        return _get_kis_broker().get_balance()
     except Exception as e:
         return {"error": str(e)}
 
@@ -61,7 +134,7 @@ def load_balance():
 @st.cache_data(ttl=120)
 def _fetch_candles(ticker: str) -> dict:
     try:
-        return KISBroker().get_minute_candles(ticker)
+        return _get_kis_broker().get_minute_candles(ticker)
     except Exception:
         return {}
 
@@ -122,9 +195,9 @@ if page == "포트폴리오":
     total_eval = data.get("total_eval", 0)
     holdings = data.get("holdings", [])
 
-    # 투자금액: INITIAL_CAPITAL 설정 시 해당 값, 미설정 시 total_eval
-    invested = INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else total_eval
-    # 평가손익 = 현재 총평가 - 투자원금
+    # 투자금액: 대시보드 설정 → 환경변수 → 예수금 순 fallback
+    INITIAL_CAPITAL = _get_initial_capital()
+    invested = INITIAL_CAPITAL if INITIAL_CAPITAL > 0 else available_cash
     profit_loss = total_eval - invested
     pl_rate = round((profit_loss / invested * 100), 2) if invested > 0 else 0.0
 
@@ -145,17 +218,19 @@ if page == "포트폴리오":
 
     _runs = get_agent_runs(limit=500)
     if _runs:
+        _ic = _get_initial_capital()
         def _run_pl_rate(r):
             p = r.get("portfolio", {})
             _te = p.get("total_eval", 0) or 0
-            if INITIAL_CAPITAL > 0:
-                return round((_te - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100, 2)
+            if _ic > 0:
+                return round((_te - _ic) / _ic * 100, 2)
             _pl = p.get("profit_loss", 0) or 0
             _hs = p.get("holdings", []) or []
             _he = sum(h.get("current_price", 0) * h.get("quantity", 0) for h in _hs)
             _se = _he if _he > 0 else _te
             _cb = _se - _pl
             return round((_pl / _cb * 100), 2) if _cb > 0 else 0.0
+        del _ic
 
         _rdf = pd.DataFrame([{"ts": r["ts"], "pl_rate": _run_pl_rate(r)} for r in _runs])
         _rdf["ts"] = pd.to_datetime(_rdf["ts"], format='ISO8601', utc=True).dt.tz_convert(KST)
@@ -245,7 +320,7 @@ if page == "포트폴리오":
     st.divider()
     st.subheader("⏳ 미체결 주문")
     try:
-        pending = KISBroker().get_pending_orders()
+        pending = _get_kis_broker().get_pending_orders()
     except Exception as e:
         pending = None
         st.warning(f"미체결 조회 실패: {e}")
@@ -281,8 +356,7 @@ elif page == "매매 이력":
         @st.cache_data(ttl=60)
         def load_order_history(start: str, end: str):
             try:
-                broker = KISBroker()
-                return broker.get_order_history(start, end)
+                return _get_kis_broker().get_order_history(start, end)
             except Exception as e:
                 return {"error": str(e)}
 
@@ -373,7 +447,6 @@ elif page == "에이전트 로그":
     runs_reversed = list(reversed(runs))
 
     for i, run in enumerate(runs_reversed[:20]):
-        # ISO 형식 문자열을 datetime으로 변환 후 KST로 포맷팅
         raw_ts = run.get("ts", "")
         try:
             dt_ts = pd.to_datetime(raw_ts, utc=True).tz_convert(KST)
@@ -398,7 +471,6 @@ elif page == "에이전트 로그":
             col2.metric("총 평가금액", f"₩{total_eval:,.0f}")
             col3.metric("보유 종목", f"{holdings_count}개")
 
-            # 매수 종목 3분봉 차트 (오늘 실행분만 라이브 조회)
             if buy_tickers:
                 st.markdown("**매수 종목 3분봉 HA 차트**")
                 try:
@@ -422,7 +494,6 @@ elif page == "에이전트 실행":
     st.title("📈 에이전트 실행")
     st.caption("장중: 실제 계좌 + 실제 주문 / 장외: 가상 ₩1,000,000 시뮬레이션")
 
-    # ── 비밀번호 확인 ────────────────────
     pw = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요", key="agent_pw")
     if pw and pw != "1018":
         st.error("비밀번호가 올바르지 않습니다.")
@@ -430,7 +501,6 @@ elif page == "에이전트 실행":
     if not pw:
         st.stop()
 
-    # ── 장중 여부 판단 ────────────────────
     import holidays as hol
     from datetime import time as dtime
 
@@ -445,7 +515,6 @@ elif page == "에이전트 실행":
     LIVE = is_market_open()
 
     # ── 저장소 헬퍼 ────────────────────
-    _GCS_DATA_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
 
     def _load_sim_index() -> list:
         if _GCS_DATA_BUCKET:
@@ -537,7 +606,7 @@ elif page == "에이전트 실행":
         try:
             from agent.trader import TradingAgent
             agent = TradingAgent()
-            result = agent.run([], sim_datetime=None, sim_portfolio_in=None)
+            result = agent.run([], sim_datetime=_get_sim_datetime(live), sim_portfolio_in=None)
             data["results"]["분석"] = {"result": result, "tool_log": agent.tool_call_log}
             _write(data)
         except Exception as e:
@@ -570,7 +639,6 @@ elif page == "에이전트 실행":
                     st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
                     st.code(e["result_preview"], language="json")
 
-    # ══ 섹션 1: 결과 목록 + 인라인 상세 ════════════════════
     st.subheader("📋 실행 결과 목록")
     sim_index = _load_sim_index()
     selected_id = st.session_state.get("selected_sim_id")
@@ -612,7 +680,6 @@ elif page == "에이전트 실행":
 
     st.divider()
 
-    # ══ 섹션 2: 실행 ══════════════════════
     st.subheader("🚀 에이전트 실행")
 
     if LIVE:
@@ -652,7 +719,6 @@ elif page == "에이전트 실행":
             st.rerun()
 
     else:
-        # 로칼 모드: 동기 실행
         run_btn = st.button(run_label, type="primary")
         if run_btn:
             _now = get_now_kst()
@@ -665,7 +731,7 @@ elif page == "에이전트 실행":
             try:
                 from agent.trader import TradingAgent
                 agent = TradingAgent()
-                result_text = agent.run([], sim_datetime=None, sim_portfolio_in=None)
+                result_text = agent.run([], sim_datetime=_get_sim_datetime(LIVE), sim_portfolio_in=None)
                 tool_log = agent.tool_call_log
                 progress.progress(1.0, text="✅ 완료!")
             except Exception as e:

@@ -80,17 +80,23 @@ def run_trading():
     summaries: list[str] = []
     all_buy_tickers: list[str] = []
 
-    # dry-run 시 1회차 조건 강제 (실행 날짜의 첫 번째 스케줄 슬롯 시각으로 고정)
+    # dry-run + 장외 시간일 때만 1회차 조건 강제
     sim_dt = None
     if dry_run:
         from agent.trader import _SCHEDULE_SLOTS
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, time as _dtime
         now_kst = get_now_kst()
-        first_slot = _SCHEDULE_SLOTS[0][0]
-        sim_dt = _dt(now_kst.year, now_kst.month, now_kst.day,
-                     first_slot.hour, first_slot.minute,
-                     tzinfo=now_kst.tzinfo)
-        logger.info("DRY-RUN: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%H:%M"))
+        market_open = _dtime(9, 0)
+        market_close = _dtime(15, 30)
+        in_market = market_open <= now_kst.time() <= market_close
+        if not in_market:
+            first_slot = _SCHEDULE_SLOTS[0][0]
+            sim_dt = _dt(now_kst.year, now_kst.month, now_kst.day,
+                         first_slot.hour, first_slot.minute,
+                         tzinfo=now_kst.tzinfo)
+            logger.info("DRY-RUN 장외: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%H:%M"))
+        else:
+            logger.info("DRY-RUN 장중: 실제 시각 기준 회차 사용 (%s)", now_kst.strftime("%H:%M"))
 
     for i in range(INNER_LOOP_COUNT):
         logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
