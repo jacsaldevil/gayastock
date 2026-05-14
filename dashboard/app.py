@@ -28,7 +28,7 @@ def _load_settings() -> dict:
                 return json.loads(blob.download_as_text())
         except Exception:
             pass
-    # 로컈 fallback
+    # 로컬 fallback
     try:
         with open(".dashboard_settings.json", encoding="utf-8") as f:
             return json.load(f)
@@ -625,7 +625,10 @@ elif page == "에이전트 실행":
         finished_disp = (sim_data.get("finished_at") or "")[:16].replace("T", " ")
         results = sim_data.get("results", {})
         if status == "running":
-            st.warning("⏳ 실행 중... — 새로고침으로 업데이트")
+            st.warning("⏳ 실행 중... — Gemini 분석 중 (5~15분 소요)")
+            import time as _time
+            _time.sleep(5)
+            st.rerun()
         elif status == "done":
             st.success(f"✅ 완료 — {finished_disp}")
         if not results:
