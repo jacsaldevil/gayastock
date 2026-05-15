@@ -28,7 +28,7 @@ def _load_settings() -> dict:
                 return json.loads(blob.download_as_text())
         except Exception:
             pass
-    # 로컈 fallback
+    # 로챈 fallback
     try:
         with open(".dashboard_settings.json", encoding="utf-8") as f:
             return json.load(f)
@@ -103,7 +103,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ── 사이드바 ──────────────────────────
+# ── 사이드바 ──────────────────────
 st.sidebar.title("📈 gayastock")
 st.sidebar.caption("AI 주식 트레이딩 에이전트")
 page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그", "에이전트 실행"])
@@ -326,7 +326,7 @@ if page == "포트폴리오":
             fig2.update_layout(yaxis_title="수익률 (%)", margin=dict(t=20, b=20, l=20, r=20), height=300)
             st.plotly_chart(fig2, use_container_width=True)
 
-    # ── 미체결 주문 ────────────────────
+    # ── 미체결 주문 ──────────────────
     st.divider()
     st.subheader("⏳ 미체결 주문")
     try:
@@ -352,7 +352,7 @@ elif page == "매매 이력":
 
     tab_kis, tab_agent = st.tabs(["📋 KIS 계좌 체결 이력", "🤖 에이전트 주문 로그"])
 
-    # ── KIS 실계좌 체결 이력 ──────────────
+    # ── KIS 실계좌 체결 이력 ──────────
     with tab_kis:
         col_date1, col_date2, col_btn = st.columns([2, 2, 1])
         with col_date1:
@@ -386,7 +386,7 @@ elif page == "매매 이력":
             hdf["ts"] = pd.to_datetime(hdf["ts"], format="%Y%m%d %H%M%S", errors="coerce")
 
             col1, col2, col3 = st.columns(3)
-            col1.metric("총 체결", len(hdf))
+            col1.metric("성 체결", len(hdf))
             col2.metric("매수", len(hdf[hdf["action"] == "BUY"]))
             col3.metric("매도", len(hdf[hdf["action"] == "SELL"]))
 
@@ -410,7 +410,7 @@ elif page == "매매 이력":
             fig.update_layout(height=300, margin=dict(t=20, b=20, l=20, r=20))
             st.plotly_chart(fig, use_container_width=True)
 
-    # ── 에이전트 주문 로그 ──────────────
+    # ── 에이전트 주문 로그 ──────────
     with tab_agent:
         trades = get_trades()
         if not trades:
@@ -422,7 +422,7 @@ elif page == "매매 이력":
             df = df.sort_values("ts", ascending=False)
 
             col1, col2, col3 = st.columns(3)
-            col1.metric("총 주문", len(df))
+            col1.metric("성 주문", len(df))
             col2.metric("매수", len(df[df["action"] == "BUY"]))
             col3.metric("매도", len(df[df["action"] == "SELL"]))
 
@@ -481,7 +481,7 @@ elif page == "에이전트 로그":
         with st.expander(label, expanded=(i == 0)):
             col1, col2, col3 = st.columns(3)
             col1.metric("예수금", f"₩{cash:,.0f}")
-            col2.metric("총 평가금액", f"₩{total_eval:,.0f}")
+            col2.metric("성 평가금액", f"₩{total_eval:,.0f}")
             col3.metric("보유 종목", f"{holdings_count}개")
 
             if buy_tickers:
@@ -527,7 +527,7 @@ elif page == "에이전트 실행":
 
     LIVE = is_market_open()
 
-    # ── 저장소 헬퍼 ────────────────────
+    # ── 저장소 헬퍼 ────────────────
 
     def _load_sim_index() -> list:
         if _GCS_DATA_BUCKET:
@@ -619,7 +619,7 @@ elif page == "에이전트 실행":
         try:
             from agent.trader import TradingAgent
             agent = TradingAgent()
-            result = agent.run([], sim_datetime=_get_sim_datetime(live), sim_portfolio_in=None)
+            result = agent.run([], sim_datetime=_get_sim_datetime(live), sim_portfolio_in=None, skip_log=True)
             data["results"]["분석"] = {"result": result, "tool_log": agent.tool_call_log}
             _write(data)
         except Exception as e:
@@ -747,7 +747,7 @@ elif page == "에이전트 실행":
             try:
                 from agent.trader import TradingAgent
                 agent = TradingAgent()
-                result_text = agent.run([], sim_datetime=_get_sim_datetime(LIVE), sim_portfolio_in=None)
+                result_text = agent.run([], sim_datetime=_get_sim_datetime(LIVE), sim_portfolio_in=None, skip_log=True)
                 tool_log = agent.tool_call_log
                 progress.progress(1.0, text="✅ 완료!")
             except Exception as e:
