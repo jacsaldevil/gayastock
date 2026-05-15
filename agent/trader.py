@@ -95,6 +95,7 @@ class TradingAgent:
         sim_portfolio_in: dict | None = None,
         cancel_pending: bool = True,
         skip_log: bool = False,
+        on_tool_call: callable = None,
     ) -> str:
         self.tool_call_log = []
         self.buy_tickers: list[str] = []
@@ -168,6 +169,11 @@ class TradingAgent:
                             "args": args,
                             "result_preview": result_str[:400],
                         })
+                        if on_tool_call:
+                            try:
+                                on_tool_call(list(self.tool_call_log))
+                            except Exception:
+                                pass
                         fn_responses.append(
                             Part.from_function_response(
                                 name=fn.name,
