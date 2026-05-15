@@ -46,13 +46,20 @@ jobs:
               --project=$PROJECT_ID --quiet 2>/dev/null || true
           done
 
-      - name: Grant GCS storage permission
+      - name: Ensure GCS data bucket
         continue-on-error: true
+        env:
+          GCS_SECRET_BUCKET: ${{ secrets.GCS_DATA_BUCKET }}
         run: |
-          SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
-          gcloud projects add-iam-policy-binding $PROJECT_ID \
-            --member="serviceAccount:$SA" \
-            --role="roles/storage.objectUser" --quiet 2>/dev/null || true
+          # secrets.GCS_DATA_BUCKET 없으면 프로젝트 ID 기반 자동 사용
+          BUCKET="${GCS_SECRET_BUCKET:-${PROJECT_ID}-gayastock}"
+          # 버킷이 없으면 생성 (이미 있으면 무시)
+          gsutil mb -l $REGION -p $PROJECT_ID gs://$BUCKET 2>/dev/null || true
+          # runner SA에 버킷 objectAdmin 권한 부여
+          gsutil iam ch \
+            "serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com:roles/storage.objectAdmin" \
+            gs://$BUCKET 2>/dev/null || true
+          echo "GCS_DATA_BUCKET=$BUCKET" >> $GITHUB_ENV
 
       - name: Configure Docker
         run: gcloud auth configure-docker $REGISTRY --quiet
@@ -74,7 +81,7 @@ jobs:
       - name: Deploy Dashboard to Cloud Run
         run: |
           IMAGE="$REGISTRY/$PROJECT_ID/gayastock/app"
-          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=${{ secrets.GCS_DATA_BUCKET }},INITIAL_CAPITAL=${{ secrets.INITIAL_CAPITAL }}"
+          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,INITIAL_CAPITAL=${{ secrets.INITIAL_CAPITAL }}"
           SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           gcloud run deploy $DASHBOARD_SERVICE \
             --image $IMAGE:$GITHUB_SHA --region $REGION \
@@ -89,7 +96,7 @@ jobs:
       - name: Update Cloud Run Job (Agent)
         run: |
           IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
-          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=${{ secrets.GCS_DATA_BUCKET }},LOG_DIR=/tmp/logs"
+          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,LOG_DIR=/tmp/logs"
           SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 900 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
           if gcloud run jobs describe $AGENT_JOB --region $REGION --quiet 2>/dev/null; then
