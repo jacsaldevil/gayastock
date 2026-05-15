@@ -188,6 +188,44 @@ def _render_ha_chart(ticker: str, name: str, candle_data: dict):
 if refresh:
     st.cache_data.clear()
 
+# ── 시뮬레이션 상태 읽기 (모듈 레벨 — 포트폴리오 페이지에서도 사용) ──────
+_SIM_DIR_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "simulations")
+
+
+def _peek_sim_index() -> list:
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob("simulations/index.json")
+            if blob.exists():
+                return json.loads(blob.download_as_text())
+        except Exception:
+            pass
+        return []
+    try:
+        with open(os.path.join(_SIM_DIR_PATH, "index.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _peek_sim_data(sim_id: str) -> dict:
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(f"simulations/{sim_id}.json")
+            if blob.exists():
+                return json.loads(blob.download_as_text())
+        except Exception:
+            pass
+        return {}
+    try:
+        with open(os.path.join(_SIM_DIR_PATH, f"{sim_id}.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
 # ════════════════════════════════════════════════════════
 if page == "포트폴리오":
     st.title("포트폴리오 현황")
@@ -218,6 +256,39 @@ if page == "포트폴리오":
     col4.metric("평가손익", f"₩{profit_loss:,.0f}", f"{pl_rate:+.2f}%",
                 delta_color="normal" if profit_loss >= 0 else "inverse")
     col5.metric("보유 종목 수", f"{len(holdings)}개")
+
+    # ── 에이전트 실행 상태 (실행 중일 때만 표시) ──────────────────────
+    import time as _time
+    _idx = _peek_sim_index()
+    _running = next((x for x in _idx if x.get("status") == "running"), None)
+    if _running:
+        _sim = _peek_sim_data(_running["id"])
+        _results = _sim.get("results", {})
+        _entry = list(_results.values())[0] if _results else {}
+        _tool_log = _entry.get("tool_log", [])
+        _created = (_running.get("created_at") or "")[:16].replace("T", " ")
+        _mode_label = "🔴 실전" if _running.get("mode") == "실전" else "🧪 시뮬"
+
+        st.divider()
+        with st.container(border=True):
+            _hcol1, _hcol2 = st.columns([3, 1])
+            _hcol1.markdown(f"**⏳ 에이전트 실행 중 — {_mode_label}** &nbsp; `{_created} 시작`", unsafe_allow_html=True)
+            _hcol2.caption(f"도구 호출 {len(_tool_log)}회")
+
+            if _tool_log:
+                _last = _tool_log[-1]
+                _last_args = ", ".join(f"{k}={v}" for k, v in _last["args"].items()) if _last["args"] else ""
+                st.caption(f"현재: Round {_last['round']} → `{_last['tool']}({_last_args})`")
+                with st.expander("📡 실시간 호출 로그", expanded=True):
+                    for _e in reversed(_tool_log[-8:]):
+                        _a = ", ".join(f"{k}={v}" for k, v in _e["args"].items()) if _e["args"] else ""
+                        st.markdown(f"**[R{_e['round']}]** `{_e['tool']}({_a})`")
+                        st.code(_e["result_preview"], language="json")
+            else:
+                st.caption("Gemini 연결 중...")
+
+        _time.sleep(3)
+        st.rerun()
 
     st.divider()
 
