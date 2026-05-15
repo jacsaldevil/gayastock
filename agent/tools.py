@@ -122,6 +122,9 @@ GEMINI_TOOLS = Tool(
 
 def execute_tool(tool_name: str, tool_input: dict) -> str:
     """Gemini가 호출한 function을 실행하고 결과를 JSON 문자열로 반환"""
+    # Vertex AI SDK가 간혹 'default_' 접두어를 붙여 함수명을 변형하는 버그 대응
+    if tool_name.startswith("default_"):
+        tool_name = tool_name[len("default_"):]
     try:
         broker = _broker()
 

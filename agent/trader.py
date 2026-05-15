@@ -132,7 +132,7 @@ class TradingAgent:
 
             logger.info(f"트레이딩 에이전트 시작: {watchlist} (Google Search: {'ON' if is_first_run else 'OFF'})")
             try:
-                chat = model.start_chat()
+                chat = model.start_chat(response_validation=False)
                 response = chat.send_message(user_message)
             except Exception as e:
                 error_msg = f"Gemini API 초기 호출 실패: {e}"
