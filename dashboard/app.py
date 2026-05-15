@@ -106,7 +106,7 @@ st.markdown("""
 # ── 사이드바 ──────────────────────
 st.sidebar.title("📈 gayastock")
 st.sidebar.caption("AI 주식 트레이딩 에이전트")
-page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그", "에이전트 실행"])
+page = st.sidebar.radio("메뉴", ["포트폴리오", "매매 이력", "에이전트 로그"])
 refresh = st.sidebar.button("🔄 새로고침")
 
 st.sidebar.divider()
@@ -307,7 +307,7 @@ def _run_agent_bg(sim_id: str, live: bool):
 
         result = agent.run(
             [], sim_datetime=_get_sim_datetime(live),
-            sim_portfolio_in=None, skip_log=True,
+            sim_portfolio_in=None, skip_log=False,
             on_tool_call=_on_tool_call,
         )
         data["results"]["분석"] = {"result": result, "tool_log": agent.tool_call_log}
@@ -323,8 +323,10 @@ def _run_agent_bg(sim_id: str, live: bool):
         _mark_done_in_index(data["finished_at"])
 
 
-def _launch_agent(live: bool) -> str:
-    """에이전트를 백그라운드로 실행하고 sim_id 반환"""
+def _launch_agent(live: bool) -> str | None:
+    """에이전트를 백그라운드로 실행하고 sim_id 반환. 이미 실행 중이면 None."""
+    if next((x for x in _sim_load_index() if x.get("status") == "running"), None):
+        return None
     _now = get_now_kst()
     sim_id = _now.strftime("%Y%m%d_%H%M%S")
     mode_str = "실전" if live else "시뮬"
@@ -466,8 +468,36 @@ if page == "포트폴리오":
                     _run_lbl = "🧪 시뮬 실행"
                 if st.button(_run_lbl, type="primary", key="portfolio_run_btn"):
                     _sid = _launch_agent(_live)
-                    st.session_state["selected_sim_id"] = _sid
-                    st.rerun()
+                    if _sid is None:
+                        st.warning("⚠️ 이미 에이전트가 실행 중입니다.")
+                    else:
+                        st.rerun()
+
+    # ── 최근 실행 이력 ───────────────────────────────────────────────
+    _done_runs = [x for x in _idx if x.get("status") == "done"][:5]
+    if _done_runs:
+        st.subheader("최근 실행 이력")
+        for _entry in _done_runs:
+            _eid = _entry["id"]
+            _created = (_entry.get("created_at") or "")[:16].replace("T", " ")
+            _mode = _entry.get("mode", "시뮬")
+            _badge = "🔴 실전" if _mode == "실전" else "🧪 시뮬"
+            _fin = (_entry.get("finished_at") or "")[:16].replace("T", " ")
+            with st.expander(f"✅ {_created} — {_badge}  →  완료 {_fin}"):
+                _sd = _sim_load_data(_eid)
+                if _sd:
+                    _r = list(_sd.get("results", {}).values())
+                    if _r:
+                        _txt = _r[0].get("result", "")
+                        if _txt and _txt != "⏳ 분석 중...":
+                            st.markdown(_txt)
+                        _tl = _r[0].get("tool_log", [])
+                        if _tl:
+                            with st.expander(f"🔍 호출 플로우 ({len(_tl)}회)"):
+                                for _e in _tl:
+                                    _a = ", ".join(f"{k}={v}" for k, v in _e["args"].items()) if _e["args"] else ""
+                                    st.markdown(f"**[R{_e['round']}]** `{_e['tool']}({_a})`")
+                                    st.code(_e["result_preview"], language="json")
 
     st.divider()
 
@@ -752,87 +782,3 @@ elif page == "에이전트 로그":
             st.markdown("**에이전트 판단 요약**")
             st.markdown(summary)
 
-# ════════════════════════════════════════════════════════
-elif page == "에이전트 실행":
-    st.title("📈 에이전트 실행")
-    st.caption("장중: 실제 계좌 + 실제 주문 / 장외: 가상 ₩1,000,000 시뮬레이션")
-
-    pw = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요", key="agent_pw")
-    if pw and pw != "1018":
-        st.error("비밀번호가 올바르지 않습니다.")
-        st.stop()
-    if not pw:
-        st.stop()
-
-    import holidays as hol
-    from datetime import time as dtime
-
-    def is_market_open() -> bool:
-        now = get_now_kst()
-        if now.weekday() >= 5:
-            return False
-        if now.date() in hol.Korea(years=[now.year]):
-            return False
-        return dtime(9, 0) <= now.time() <= dtime(15, 30)
-
-    LIVE = is_market_open()
-
-    st.subheader("📋 실행 결과 목록")
-    sim_index = _sim_load_index()
-    selected_id = st.session_state.get("selected_sim_id")
-
-    if not sim_index:
-        st.info("아직 실행 기록이 없습니다.")
-    else:
-        for i, entry in enumerate(sim_index):
-            eid = entry["id"]
-            created = (entry.get("created_at") or "")[:16].replace("T", " ")
-            mode = entry.get("mode", "시뮬")
-            mode_badge = "🔴 실전" if mode == "실전" else "🧪 시뮬"
-            status_icon = "✅" if entry.get("status") == "done" else "⏳"
-            is_open = selected_id == eid
-            toggle_label = "▲" if is_open else "▼"
-
-            cols = st.columns([2.2, 0.7, 0.45, 0.45])
-            cols[0].markdown(f"{status_icon} **{created}**")
-            cols[1].caption(mode_badge)
-            if cols[2].button(toggle_label, key=f"v_{eid}_{i}", use_container_width=True):
-                if is_open:
-                    st.session_state.pop("selected_sim_id", None)
-                else:
-                    st.session_state["selected_sim_id"] = eid
-                st.rerun()
-            if cols[3].button("🗑", key=f"d_{eid}_{i}", use_container_width=True):
-                _sim_delete(eid)
-                if is_open:
-                    st.session_state.pop("selected_sim_id", None)
-                st.rerun()
-
-            if is_open:
-                sim_data = _sim_load_data(eid)
-                if sim_data:
-                    _show_sim_results(sim_data)
-                else:
-                    st.warning("데이터를 찾을 수 없습니다.")
-                st.divider()
-
-    st.divider()
-
-    st.subheader("🚀 에이전트 실행")
-
-    if LIVE:
-        st.error("🔴 **장중입니다 — 실제 계좌로 실제 주문이 실행됩니다.**")
-        run_label = "📈 실행 (실제 주문)"
-    else:
-        st.info("🧪 장외 — 가상 ₩1,000,000으로 시뮬레이션합니다.")
-        run_label = "🧪 실행 (시뮬레이션)"
-
-    col_run, col_refresh, col_info = st.columns([1, 1, 2])
-    run_btn = col_run.button(run_label, use_container_width=True, type="primary")
-    col_refresh.button("🔄 결과 확인", use_container_width=True)
-    col_info.caption("실행 후 이 페이지에서 3초마다 자동 갱신됩니다")
-
-    if run_btn:
-        sim_id = _launch_agent(LIVE)
-        st.session_state["selected_sim_id"] = sim_id
-        st.rerun()
