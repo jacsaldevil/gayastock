@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 
 TOKEN_CACHE_FILE = ".kis_token_cache.json"
 TOKEN_CACHE_BLOB = "kis_token_cache.json"
-# Cloud Run 환경에서는 GCS_TOKEN_BUCKET 환경변수로 버킷명 지정
-_GCS_BUCKET = os.environ.get("GCS_TOKEN_BUCKET", "")
+# GCS_TOKEN_BUCKET 우선, 없으면 GCS_DATA_BUCKET 공유 (Cloud Run 환경)
+_GCS_BUCKET = os.environ.get("GCS_TOKEN_BUCKET") or os.environ.get("GCS_DATA_BUCKET", "")
 
 
 def _gcs_read_token() -> dict | None:
