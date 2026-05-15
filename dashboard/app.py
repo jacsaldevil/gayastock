@@ -205,15 +205,38 @@ def _sim_load_index() -> list:
             from google.cloud import storage
             blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob("simulations/index.json")
             if blob.exists():
-                return json.loads(blob.download_as_text())
+                idx = json.loads(blob.download_as_text())
+            else:
+                idx = []
         except Exception:
-            pass
-        return []
-    try:
-        with open(_local_sim_path("index.json"), encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return []
+            return []
+    else:
+        try:
+            with open(_local_sim_path("index.json"), encoding="utf-8") as f:
+                idx = json.load(f)
+        except Exception:
+            idx = []
+    # 20분 이상 running 상태인 항목 자동 만료 (컨테이너 재시작 등으로 스레드 소멸 시 대비)
+    _now = get_now_kst()
+    _changed = False
+    for _e in idx:
+        if _e.get("status") != "running":
+            continue
+        try:
+            _dt = datetime.fromisoformat(_e["created_at"])
+            if _dt.tzinfo is None:
+                _dt = _dt.replace(tzinfo=KST)
+            if (_now - _dt).total_seconds() > 1200:
+                _e["status"] = "error"
+                _e["finished_at"] = _now.isoformat()
+                _changed = True
+        except Exception:
+            _e["status"] = "error"
+            _e["finished_at"] = _now.isoformat()
+            _changed = True
+    if _changed:
+        _sim_save_index(idx)
+    return idx
 
 
 def _sim_save_index(index: list):
@@ -473,31 +496,35 @@ if page == "포트폴리오":
                     else:
                         st.rerun()
 
-    # ── 최근 실행 이력 ───────────────────────────────────────────────
-    _done_runs = [x for x in _idx if x.get("status") == "done"][:5]
-    if _done_runs:
+    # ── 최근 실행 이력 (스케줄 + 수동 전체, agent_runs.jsonl 기반) ────────────
+    _recent_agent_runs = get_agent_runs(limit=5)
+    if _recent_agent_runs:
         st.subheader("최근 실행 이력")
-        for _entry in _done_runs:
-            _eid = _entry["id"]
-            _created = (_entry.get("created_at") or "")[:16].replace("T", " ")
-            _mode = _entry.get("mode", "시뮬")
-            _badge = "🔴 실전" if _mode == "실전" else "🧪 시뮬"
-            _fin = (_entry.get("finished_at") or "")[:16].replace("T", " ")
-            with st.expander(f"✅ {_created} — {_badge}  →  완료 {_fin}"):
-                _sd = _sim_load_data(_eid)
-                if _sd:
-                    _r = list(_sd.get("results", {}).values())
-                    if _r:
-                        _txt = _r[0].get("result", "")
-                        if _txt and _txt != "⏳ 분석 중...":
-                            st.markdown(_txt)
-                        _tl = _r[0].get("tool_log", [])
-                        if _tl:
-                            with st.expander(f"🔍 호출 플로우 ({len(_tl)}회)"):
-                                for _e in _tl:
-                                    _a = ", ".join(f"{k}={v}" for k, v in _e["args"].items()) if _e["args"] else ""
-                                    st.markdown(f"**[R{_e['round']}]** `{_e['tool']}({_a})`")
-                                    st.code(_e["result_preview"], language="json")
+        for _run in reversed(_recent_agent_runs):
+            _rts = _run.get("ts", "")
+            try:
+                _rdt = pd.to_datetime(_rts, utc=True).tz_convert(KST)
+                _rts_disp = _rdt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                _rts_disp = _rts[:16].replace("T", " ")
+            _rpf = _run.get("portfolio", {})
+            _rte = _rpf.get("total_eval", 0) or 0
+            _rbuy = _run.get("buy_tickers", [])
+            _rbuy_str = f"  |  매수: {', '.join(_rbuy)}" if _rbuy else ""
+            _rsum = _run.get("summary", "")
+            _rprev = ""
+            for _rln in _rsum.split('\n'):
+                _rln = _rln.strip().lstrip('#-| ').strip()
+                if _rln and not _rln.startswith('---'):
+                    _rprev = _rln[:40] + ('…' if len(_rln) > 40 else '')
+                    break
+            with st.expander(f"🤖 {_rts_disp} — ₩{_rte:,.0f}{_rbuy_str}  {_rprev}"):
+                _rc1, _rc2, _rc3 = st.columns(3)
+                _rc1.metric("예수금", f"₩{_rpf.get('cash', 0):,.0f}")
+                _rc2.metric("평가금액", f"₩{_rte:,.0f}")
+                _rc3.metric("보유 종목", f"{len(_rpf.get('holdings', []))}개")
+                if _rsum:
+                    st.markdown(_rsum)
 
     st.divider()
 

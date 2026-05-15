@@ -46,6 +46,14 @@ jobs:
               --project=$PROJECT_ID --quiet 2>/dev/null || true
           done
 
+      - name: Grant GCS storage permission
+        continue-on-error: true
+        run: |
+          SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
+          gcloud projects add-iam-policy-binding $PROJECT_ID \
+            --member="serviceAccount:$SA" \
+            --role="roles/storage.objectUser" --quiet 2>/dev/null || true
+
       - name: Configure Docker
         run: gcloud auth configure-docker $REGISTRY --quiet
 

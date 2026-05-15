@@ -31,7 +31,7 @@ def _gcs_read_lines(blob_name: str) -> list[str]:
         return []
 
 
-def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None):
+def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) -> bool:
     try:
         from google.cloud import storage
         bucket = storage.Client().bucket(_GCS_BUCKET)
@@ -43,8 +43,10 @@ def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None):
             lines = lines[-max_records:]
         blob.upload_from_string("\n".join(lines) + "\n",
                                 content_type="text/plain; charset=utf-8")
+        return True
     except Exception as e:
         logger.warning("GCS 쓰기 실패 (%s): %s", blob_name, e)
+        return False
 
 
 # ── 로칼 파일 헬퍼 ────────────────────
@@ -74,9 +76,10 @@ def _local_read_lines(filepath: str) -> list[str]:
 def _append(blob_name: str, filepath: str, record: dict, max_records: int | None = None):
     line = json.dumps(record, ensure_ascii=False)
     if _GCS_BUCKET:
-        _gcs_append_line(blob_name, line, max_records)
-    else:
-        _local_append(filepath, line, max_records)
+        if _gcs_append_line(blob_name, line, max_records):
+            return
+        logger.warning("GCS 쓰기 실패 — 로컬 파일 fallback: %s", filepath)
+    _local_append(filepath, line, max_records)
 
 
 def _read_all(blob_name: str, filepath: str) -> list[dict]:
