@@ -105,6 +105,8 @@ class KISBroker:
         res = requests.post(url, json=body, timeout=10)
         res.raise_for_status()
         data = res.json()
+        if "access_token" not in data:
+            raise ValueError(f"KIS 토큰 발급 실패: {data.get('msg1', data.get('msg', str(data)))}")
         self._access_token = data["access_token"]
         self._token_expires_at = get_now_kst() + timedelta(hours=23)
         self._save_token_cache(self._access_token, self._token_expires_at)

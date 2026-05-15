@@ -412,7 +412,17 @@ if page == "포트폴리오":
     data = load_balance()
 
     if "error" in data:
-        st.error("잔고 조회에 실패했습니다. API 설정을 확인하세요.")
+        st.error(f"잔고 조회 실패: {data['error']}")
+        with st.expander("🔍 진단 정보"):
+            from config import KIS_APP_KEY, KIS_APP_SECRET, KIS_ACCOUNT_NO, KIS_MOCK, KIS_BASE_URL
+            st.json({
+                "KIS_APP_KEY":    "✅ 설정됨" if KIS_APP_KEY    else "❌ 미설정",
+                "KIS_APP_SECRET": "✅ 설정됨" if KIS_APP_SECRET else "❌ 미설정",
+                "KIS_ACCOUNT_NO": "✅ 설정됨" if KIS_ACCOUNT_NO else "❌ 미설정",
+                "KIS_MOCK":       KIS_MOCK,
+                "KIS_BASE_URL":   KIS_BASE_URL,
+                "GCS_DATA_BUCKET": "✅ 설정됨" if _GCS_DATA_BUCKET else "❌ 미설정",
+            })
         st.stop()
 
     # 상단 요약 카드
