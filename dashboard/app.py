@@ -527,7 +527,12 @@ elif page == "에이전트 실행":
 
     LIVE = is_market_open()
 
-    # ── 저장소 헬퍼 ────────────────
+    # ── 저장소 헬퍼 (GCS 있으면 GCS, 없으면 로컬 파일) ────────────────
+    _SIM_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "logs", "simulations")
+
+    def _local_sim_path(filename: str) -> str:
+        os.makedirs(_SIM_DIR, exist_ok=True)
+        return os.path.join(_SIM_DIR, filename)
 
     def _load_sim_index() -> list:
         if _GCS_DATA_BUCKET:
@@ -539,7 +544,11 @@ elif page == "에이전트 실행":
             except Exception:
                 pass
             return []
-        return st.session_state.get("sim_index", [])
+        try:
+            with open(_local_sim_path("index.json"), encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
 
     def _save_sim_index(index: list):
         if _GCS_DATA_BUCKET:
@@ -547,10 +556,14 @@ elif page == "에이전트 실행":
                 from google.cloud import storage
                 blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob("simulations/index.json")
                 blob.upload_from_string(json.dumps(index, ensure_ascii=False), content_type="application/json")
+                return
             except Exception:
                 pass
-        else:
-            st.session_state["sim_index"] = index
+        try:
+            with open(_local_sim_path("index.json"), "w", encoding="utf-8") as f:
+                json.dump(index, f, ensure_ascii=False)
+        except Exception:
+            pass
 
     def _load_sim_data(sim_id: str) -> dict:
         if _GCS_DATA_BUCKET:
@@ -562,7 +575,11 @@ elif page == "에이전트 실행":
             except Exception:
                 pass
             return {}
-        return st.session_state.get("sim_store", {}).get(sim_id, {})
+        try:
+            with open(_local_sim_path(f"{sim_id}.json"), encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
     def _save_sim_data(sim_id: str, data: dict):
         if _GCS_DATA_BUCKET:
@@ -570,10 +587,14 @@ elif page == "에이전트 실행":
                 from google.cloud import storage
                 blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(f"simulations/{sim_id}.json")
                 blob.upload_from_string(json.dumps(data, ensure_ascii=False), content_type="application/json")
+                return
             except Exception:
                 pass
-        else:
-            st.session_state.setdefault("sim_store", {})[sim_id] = data
+        try:
+            with open(_local_sim_path(f"{sim_id}.json"), "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False)
+        except Exception:
+            pass
 
     def _delete_sim(sim_id: str):
         if _GCS_DATA_BUCKET:
@@ -583,43 +604,45 @@ elif page == "에이전트 실행":
             except Exception:
                 pass
         else:
-            st.session_state.get("sim_store", {}).pop(sim_id, None)
+            try:
+                os.remove(_local_sim_path(f"{sim_id}.json"))
+            except Exception:
+                pass
         _save_sim_index([x for x in _load_sim_index() if x["id"] != sim_id])
 
     def _run_agent_bg(sim_id: str, live: bool):
-        """백그라운드 스레드: 에이전트 1회 실행 후 GCS 저장"""
-        from google.cloud import storage as _gcs
-
+        """백그라운드 스레드: 에이전트 1회 실행, tool call마다 중간 결과 저장"""
         def _write(d):
-            try:
-                _gcs.Client().bucket(_GCS_DATA_BUCKET).blob(
-                    f"simulations/{sim_id}.json"
-                ).upload_from_string(json.dumps(d, ensure_ascii=False), content_type="application/json")
-            except Exception:
-                pass
+            _save_sim_data(sim_id, d)
 
         def _mark_done_in_index(finished_at):
-            try:
-                idx_blob = _gcs.Client().bucket(_GCS_DATA_BUCKET).blob("simulations/index.json")
-                idx = json.loads(idx_blob.download_as_text()) if idx_blob.exists() else []
-                entry = next((x for x in idx if x["id"] == sim_id), None)
-                if entry:
-                    entry["status"] = "done"
-                    entry["finished_at"] = finished_at
-                idx_blob.upload_from_string(json.dumps(idx, ensure_ascii=False), content_type="application/json")
-            except Exception:
-                pass
+            idx = _load_sim_index()
+            entry = next((x for x in idx if x["id"] == sim_id), None)
+            if entry:
+                entry["status"] = "done"
+                entry["finished_at"] = finished_at
+            _save_sim_index(idx)
 
         if not live:
             os.environ["DRY_RUN"] = "true"
-        data = _load_sim_data(sim_id) or {
+        data = {
             "id": sim_id, "status": "running",
             "created_at": get_now_kst().isoformat(), "results": {},
         }
+        _write(data)
         try:
             from agent.trader import TradingAgent
             agent = TradingAgent()
-            result = agent.run([], sim_datetime=_get_sim_datetime(live), sim_portfolio_in=None, skip_log=True)
+
+            def _on_tool_call(tool_log):
+                data["results"]["분석"] = {"result": "⏳ 분석 중...", "tool_log": tool_log}
+                _write(data)
+
+            result = agent.run(
+                [], sim_datetime=_get_sim_datetime(live),
+                sim_portfolio_in=None, skip_log=True,
+                on_tool_call=_on_tool_call,
+            )
             data["results"]["분석"] = {"result": result, "tool_log": agent.tool_call_log}
             _write(data)
         except Exception as e:
@@ -633,22 +656,36 @@ elif page == "에이전트 실행":
             _mark_done_in_index(data["finished_at"])
 
     def _show_sim_results(sim_data: dict):
+        import time as _time
         status = sim_data.get("status", "")
         finished_disp = (sim_data.get("finished_at") or "")[:16].replace("T", " ")
         results = sim_data.get("results", {})
+
         if status == "running":
-            st.warning("⏳ 실행 중... — Gemini 분석 중 (5~15분 소요)")
-            import time as _time
-            _time.sleep(5)
+            entry = list(results.values())[0] if results else {}
+            tool_log = entry.get("tool_log", [])
+            if tool_log:
+                st.warning(f"⏳ 실행 중... — 도구 호출 {len(tool_log)}회 완료, Gemini 분석 중")
+                with st.expander(f"📡 실시간 호출 로그 ({len(tool_log)}회)", expanded=True):
+                    for e in reversed(tool_log[-10:]):
+                        args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
+                        st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
+                        st.code(e["result_preview"], language="json")
+            else:
+                st.warning("⏳ 실행 중... — Gemini 연결 중 (잠시 후 자동 갱신)")
+            _time.sleep(3)
             st.rerun()
         elif status == "done":
             st.success(f"✅ 완료 — {finished_disp}")
+
         if not results:
             return
         entry = list(results.values())[0]
-        st.markdown(entry.get("result", "결과 없음"))
+        result_text = entry.get("result", "결과 없음")
+        if result_text != "⏳ 분석 중...":
+            st.markdown(result_text)
         tool_log = entry.get("tool_log", [])
-        if tool_log:
+        if tool_log and status == "done":
             with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)"):
                 for e in tool_log:
                     args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
@@ -705,68 +742,30 @@ elif page == "에이전트 실행":
         st.info("🧪 장외 — 가상 ₩1,000,000으로 시뮬레이션합니다.")
         run_label = "🧪 실행 (시뮬레이션)"
 
-    if _GCS_DATA_BUCKET:
-        col_run, col_refresh, col_info = st.columns([1, 1, 2])
-        run_btn = col_run.button(run_label, use_container_width=True, type="primary")
-        col_refresh.button("🔄 결과 확인", use_container_width=True)
-        col_info.caption("앱 전환 후 돌아와도 '결과 확인'으로 진행 상황을 볼 수 있습니다")
+    col_run, col_refresh, col_info = st.columns([1, 1, 2])
+    run_btn = col_run.button(run_label, use_container_width=True, type="primary")
+    col_refresh.button("🔄 결과 확인", use_container_width=True)
+    col_info.caption("실행 후 이 페이지에서 3초마다 자동 갱신됩니다")
 
-        if run_btn:
-            _now = get_now_kst()
-            sim_id = _now.strftime("%Y%m%d_%H%M%S")
-            created_at = _now.isoformat()
-            mode_str = "실전" if LIVE else "시뮬"
-            _save_sim_data(sim_id, {
-                "id": sim_id, "status": "running",
-                "mode": mode_str, "created_at": created_at, "results": {},
-            })
-            idx = _load_sim_index()
-            idx.insert(0, {
-                "id": sim_id, "created_at": created_at,
-                "mode": mode_str, "status": "running", "finished_at": None,
-            })
-            _save_sim_index(idx)
-            threading.Thread(
-                target=_run_agent_bg,
-                args=(sim_id, LIVE),
-                daemon=True,
-            ).start()
-            st.session_state["selected_sim_id"] = sim_id
-            st.rerun()
-
-    else:
-        run_btn = st.button(run_label, type="primary")
-        if run_btn:
-            _now = get_now_kst()
-            sim_id = _now.strftime("%Y%m%d_%H%M%S")
-            created_at = _now.isoformat()
-            mode_str = "실전" if LIVE else "시뮬"
-            if not LIVE:
-                os.environ["DRY_RUN"] = "true"
-            progress = st.progress(0, text="에이전트 실행 중...")
-            try:
-                from agent.trader import TradingAgent
-                agent = TradingAgent()
-                result_text = agent.run([], sim_datetime=_get_sim_datetime(LIVE), sim_portfolio_in=None, skip_log=True)
-                tool_log = agent.tool_call_log
-                progress.progress(1.0, text="✅ 완료!")
-            except Exception as e:
-                result_text = f"❌ 실행 오류: {e}"
-                tool_log = []
-            finally:
-                os.environ["DRY_RUN"] = "false"
-            finished_at = get_now_kst().isoformat()
-            sim_data_new = {
-                "id": sim_id, "status": "done", "mode": mode_str,
-                "created_at": created_at, "finished_at": finished_at,
-                "results": {"분석": {"result": result_text, "tool_log": tool_log}},
-            }
-            _save_sim_data(sim_id, sim_data_new)
-            idx_list = _load_sim_index()
-            idx_list.insert(0, {
-                "id": sim_id, "created_at": created_at,
-                "mode": mode_str, "status": "done", "finished_at": finished_at,
-            })
-            _save_sim_index(idx_list)
-            st.session_state["selected_sim_id"] = sim_id
-            st.rerun()
+    if run_btn:
+        _now = get_now_kst()
+        sim_id = _now.strftime("%Y%m%d_%H%M%S")
+        created_at = _now.isoformat()
+        mode_str = "실전" if LIVE else "시뮬"
+        _save_sim_data(sim_id, {
+            "id": sim_id, "status": "running",
+            "mode": mode_str, "created_at": created_at, "results": {},
+        })
+        idx = _load_sim_index()
+        idx.insert(0, {
+            "id": sim_id, "created_at": created_at,
+            "mode": mode_str, "status": "running", "finished_at": None,
+        })
+        _save_sim_index(idx)
+        threading.Thread(
+            target=_run_agent_bg,
+            args=(sim_id, LIVE),
+            daemon=True,
+        ).start()
+        st.session_state["selected_sim_id"] = sim_id
+        st.rerun()
