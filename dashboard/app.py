@@ -2,8 +2,11 @@
 import sys
 import os
 import json
+import logging
 import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+logger = logging.getLogger(__name__)
 
 from datetime import datetime, timedelta
 from data.utils import get_now_kst, KST
@@ -26,9 +29,11 @@ def _load_settings() -> dict:
             blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
             if blob.exists():
                 return json.loads(blob.download_as_text())
+            return {}  # GCS 설정됐지만 아직 저장된 값 없음 → 로컬 참조 안 함
         except Exception:
             pass
-    # 로챈 fallback
+        return {}
+    # GCS 미설정 → 로컬 파일
     try:
         with open(".dashboard_settings.json", encoding="utf-8") as f:
             return json.load(f)
@@ -36,20 +41,25 @@ def _load_settings() -> dict:
         return {}
 
 
-def _save_settings(data: dict):
+def _save_settings(data: dict) -> str:
+    """저장 위치 반환: 'gcs' | 'local' | 'error'"""
+    # 기존 설정과 병합
+    existing = _load_settings()
+    existing.update(data)
     if _GCS_DATA_BUCKET:
         try:
             from google.cloud import storage
             blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
-            blob.upload_from_string(json.dumps(data), content_type="application/json")
-            return
-        except Exception:
-            pass
+            blob.upload_from_string(json.dumps(existing), content_type="application/json")
+            return "gcs"
+        except Exception as e:
+            logger.warning("settings GCS 저장 실패: %s", e)
     try:
         with open(".dashboard_settings.json", "w", encoding="utf-8") as f:
-            json.dump(data, f)
+            json.dump(existing, f)
+        return "local"
     except Exception:
-        pass
+        return "error"
 
 
 def _get_initial_capital() -> int:
@@ -119,8 +129,14 @@ _new_capital = st.sidebar.number_input(
     label_visibility="collapsed",
 )
 if st.sidebar.button("저장", use_container_width=True):
-    _save_settings({"initial_capital": int(_new_capital)})
+    _where = _save_settings({"initial_capital": int(_new_capital)})
     st.cache_data.clear()
+    if _where == "gcs":
+        st.sidebar.success("✅ GCS 저장 완료 (영구 보존)")
+    elif _where == "local":
+        st.sidebar.warning("⚠️ 로컬 저장 (재배포 시 초기화)")
+    else:
+        st.sidebar.error("❌ 저장 실패")
     st.rerun()
 if not _GCS_DATA_BUCKET:
     st.sidebar.caption("⚠️ GCS 미설정 — 재배포 시 초기화됨")
