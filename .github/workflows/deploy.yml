@@ -49,12 +49,19 @@ jobs:
       - name: Configure Docker
         run: gcloud auth configure-docker $REGISTRY --quiet
 
-      - name: Build & Push image
+      - name: Build & Push Dashboard image
         run: |
           IMAGE="$REGISTRY/$PROJECT_ID/gayastock/app"
           docker build -t $IMAGE:$GITHUB_SHA -t $IMAGE:latest .
           docker push $IMAGE:$GITHUB_SHA
           docker push $IMAGE:latest
+
+      - name: Build & Push Agent image
+        run: |
+          AGENT_IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
+          docker build -f Dockerfile.agent -t $AGENT_IMAGE:$GITHUB_SHA -t $AGENT_IMAGE:latest .
+          docker push $AGENT_IMAGE:$GITHUB_SHA
+          docker push $AGENT_IMAGE:latest
 
       - name: Deploy Dashboard to Cloud Run
         run: |
@@ -73,7 +80,7 @@ jobs:
 
       - name: Update Cloud Run Job (Agent)
         run: |
-          IMAGE="$REGISTRY/$PROJECT_ID/gayastock/app"
+          IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
           ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=${{ secrets.GCS_DATA_BUCKET }},LOG_DIR=/tmp/logs"
           SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 900 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
