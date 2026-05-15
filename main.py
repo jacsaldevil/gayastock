@@ -1,1 +1,154 @@
-IiIiCmdheWFzdG9jayAtIOqxsOuemOufiSDrqqjrqZjthYAgKyBWV0FQIOq1reuCtCDso7zsi50g7Yq466CI7J2065SpIOyXkOydtOyghO2KuArsi6Ttlok6IHB5dGhvbiBtYWluLnB5IC0tb25jZSAgICAgICAgIyAx7ZqMIOymieyLnCDsi6TtlokgKOuCtOu2gCDro6jtlIQg7Y+s7ZWoKQogICAgICBweXRob24gbWFpbi5weSAtLWRyeS1ydW4gICAgICMg7Iuc666s66CI7J207IWYIOuqqOuTnAoiIiIKaW1wb3J0IGFyZ3BhcnNlCmltcG9ydCBsb2dnaW5nCmltcG9ydCBvcwppbXBvcnQgdGltZQpmcm9tIGRhdGEudXRpbHMgaW1wb3J0IGdldF9ub3dfa3N0Cgpsb2dnaW5nLkZvcm1hdHRlci5jb252ZXJ0ZXIgPSBsYW1iZGEgKmFyZ3M6IGdldF9ub3dfa3N0KCkudGltZXR1cGxlKCkKCl9sb2dfZGlyID0gb3MuZW52aXJvbi5nZXQoIkxPR19ESVIiLCAibG9ncyIpCm9zLm1ha2VkaXJzKF9sb2dfZGlyLCBleGlzdF9vaz1UcnVlKQoKbG9nZ2luZy5iYXNpY0NvbmZpZygKICAgIGxldmVsPWxvZ2dpbmcuSU5GTywKICAgIGZvcm1hdD0iJShhc2N0aW1lKXMgWyUobGV2ZWxuYW1lKXNdICUobWVzc2FnZSlzIiwKICAgIGhhbmRsZXJzPVsKICAgICAgICBsb2dnaW5nLlN0cmVhbUhhbmRsZXIoKSwKICAgICAgICBsb2dnaW5nLkZpbGVIYW5kbGVyKG9zLnBhdGguam9pbihfbG9nX2RpciwgInRyYWRpbmcubG9nIiksIGVuY29kaW5nPSJ1dGYtOCIpLAogICAgXSwKKQpsb2dnZXIgPSBsb2dnaW5nLmdldExvZ2dlcihfX25hbWVfXykKCgpkZWYgaXNfdHJhZGluZ19kYXkoKSAtPiBib29sOgogICAgaW1wb3J0IGhvbGlkYXlzCiAgICB0b2RheSA9IGdldF9ub3dfa3N0KCkuZGF0ZSgpCiAgICBpZiB0b2RheS53ZWVrZGF5KCkgPj0gNToKICAgICAgICByZXR1cm4gRmFsc2UKICAgIGtyX2hvbGlkYXlzID0gaG9saWRheXMuS29yZWEoeWVhcnM9dG9kYXkueWVhcikKICAgIHJldHVybiB0b2RheSBub3QgaW4ga3JfaG9saWRheXMKCgpkZWYgX2NoZWNrX25lZWRzX2FjdGlvbihicm9rZXIsIHRha2VfcHJvZml0X3BjdDogZmxvYXQsIHN0b3BfbG9zc19wY3Q6IGZsb2F0LCBtYXhfcG9zaXRpb25zOiBpbnQpIC0+IGJvb2w6CiAgICAiIiJQeXRob24g7IKs7KCEIOyytO2BrDogVFAvU0wg7KGw6rG0IOuYkOuKlCDruYgg7Iqs66GvIOyXrOu2gC4gVHJ1ZeuptCBHZW1pbmkg7Zi47LacIO2VhOyalC4iIiIKICAgIHBvcnRmb2xpbyA9IGJyb2tlci5nZXRfYmFsYW5jZSgpCiAgICBob2xkaW5ncyA9IHBvcnRmb2xpby5nZXQoImhvbGRpbmdzIiwgW10pCgogICAgZm9yIGggaW4gaG9sZGluZ3M6CiAgICAgICAgcmF0ZSA9IGguZ2V0KCJwcm9maXRfbG9zc19yYXRlIiwgMCkKICAgICAgICBpZiByYXRlID49IHRha2VfcHJvZml0X3BjdCBvciByYXRlIDw9IC1zdG9wX2xvc3NfcGN0OgogICAgICAgICAgICBsb2dnZXIuaW5mbygiVFAvU0wg7KGw6rG0IO2VtOuLuTogJXMgJS4yZiUlIOKGkiBHZW1pbmkg7Zi47LacIiwgaC5nZXQoInRpY2tlciIpLCByYXRlKQogICAgICAgICAgICByZXR1cm4gVHJ1ZQoKICAgIGlmIGxlbihob2xkaW5ncykgPCBtYXhfcG9zaXRpb25zOgogICAgICAgIGxvZ2dlci5pbmZvKCLruYgg7Iqs66GvIOyeiOydjCAoJWQvJWQpIOKGkiBHZW1pbmkg7Zi47LacIiwgbGVuKGhvbGRpbmdzKSwgbWF4X3Bvc2l0aW9ucykKICAgICAgICByZXR1cm4gVHJ1ZQoKICAgIGxvZ2dlci5pbmZvKCLtj6zsp4DshZgg7ZKALCBUUC9TTCDsl4bsnYwg4oaSIEdlbWluaSDsiqTtgrUiKQogICAgcmV0dXJuIEZhbHNlCgoKZGVmIHJ1bl90cmFkaW5nKCk6CiAgICBpZiBub3QgaXNfdHJhZGluZ19kYXkoKToKICAgICAgICBsb2dnZXIuaW5mbygi7Jik64qY7J2AIO2ctOyepeydvCjqs7XtnLTsnbwv7KO866eQKeyeheuLiOuLpC4g6rG064SI65yB64uI64ukLiIpCiAgICAgICAgcmV0dXJuCgogICAgZnJvbSBhZ2VudC50cmFkZXIgaW1wb3J0IFRyYWRpbmdBZ2VudAogICAgZnJvbSBhZ2VudC50b29scyBpbXBvcnQgX2Jyb2tlcgogICAgZnJvbSBjb25maWcgaW1wb3J0ICgKICAgICAgICBUQUtFX1BST0ZJVF9QQ1QsIFNUT1BfTE9TU19QQ1QsIE1BWF9QT1NJVElPTlMsCiAgICAgICAgSU5ORVJfTE9PUF9DT1VOVCwgSU5ORVJfTE9PUF9TTEVFUF9TRUMsCiAgICApCgogICAgZHJ5X3J1biA9IG9zLmVudmlyb24uZ2V0KCJEUllfUlVOIiwgImZhbHNlIikubG93ZXIoKSA9PSAidHJ1ZSIKICAgIGFnZW50ID0gVHJhZGluZ0FnZW50KCkKICAgIGJyb2tlciA9IF9icm9rZXIoKQoKICAgIGxvZ2dlci5pbmZvKCI9IiAqIDYwKQogICAgbG9nZ2VyLmluZm8oCiAgICAgICAgIu2KuOugiOydtOuUqSDshLjshZgg7Iuc7J6RIOKAlCDro6jtlIQgJWTtmowgLyDsiqzrpr0gJWTstIglcyIsCiAgICAgICAgSU5ORVJfTE9PUF9DT1VOVCwgSU5ORVJfTE9PUF9TTEVFUF9TRUMsCiAgICAgICAgIiAgW0RSWS1SVU5dIiBpZiBkcnlfcnVuIGVsc2UgIiIsCiAgICApCgogICAgIyBkcnktcnVuICsg7J6l7Jm4IOyLnOqwhOydvCDrlYzrp4wgMe2ajOywqCDsobDqsbQg6rCV7KCcCiAgICBzaW1fZHQgPSBOb25lCiAgICBpZiBkcnlfcnVuOgogICAgICAgIGZyb20gYWdlbnQudHJhZGVyIGltcG9ydCBfU0NIRURVTEVfU0xPVFMKICAgICAgICBmcm9tIGRhdGV0aW1lIGltcG9ydCBkYXRldGltZSBhcyBfZHQsIHRpbWUgYXMgX2R0aW1lCiAgICAgICAgbm93X2tzdCA9IGdldF9ub3dfa3N0KCkKICAgICAgICBtYXJrZXRfb3BlbiA9IF9kdGltZSg5LCAwKQogICAgICAgIG1hcmtldF9jbG9zZSA9IF9kdGltZSgxNSwgMzApCiAgICAgICAgaW5fbWFya2V0ID0gbWFya2V0X29wZW4gPD0gbm93X2tzdC50aW1lKCkgPD0gbWFya2V0X2Nsb3NlCiAgICAgICAgaWYgbm90IGluX21hcmtldDoKICAgICAgICAgICAgZmlyc3Rfc2xvdCA9IF9TQ0hFRFVMRV9TTE9UU1swXVswXQogICAgICAgICAgICBzaW1fZHQgPSBfZHQobm93X2tzdC55ZWFyLCBub3dfa3N0Lm1vbnRoLCBub3dfa3N0LmRheSwKICAgICAgICAgICAgICAgICAgICAgICAgIGZpcnN0X3Nsb3QuaG91ciwgZmlyc3Rfc2xvdC5taW51dGUsCiAgICAgICAgICAgICAgICAgICAgICAgICB0emluZm89bm93X2tzdC50emluZm8pCiAgICAgICAgICAgIGxvZ2dlci5pbmZvKCJEUlktUlVOIOyepeyZuDogc2ltX2RhdGV0aW1lPSVzICgx7ZqM7LCoIOqwleygnCkiLCBzaW1fZHQuc3RyZnRpbWUoIiVIOiVNIikpCiAgICAgICAgZWxzZToKICAgICAgICAgICAgbG9nZ2VyLmluZm8oIkRSWS1SVU4g7J6l7KSROiDsi6TsoJwg7Iuc6rCBIOq4sOykgCDtmozssKgg7IKs7JqpICglcykiLCBub3dfa3N0LnN0cmZ0aW1lKCIlSDolTSIpKQoKICAgIGZvciBpIGluIHJhbmdlKElOTkVSX0xPT1BfQ09VTlQpOgogICAgICAgIGxvZ2dlci5pbmZvKCItLS0g66Oo7ZSEICVkLyVkIC0tLSIsIGkgKyAxLCBJTk5FUl9MT09QX0NPVU5UKQoKICAgICAgICAjIGRyeS1ydW7snYAgc2ltIO2PrO2KuO2PtOumrOyYpOulvCBhZ2VudOqwgCDqtIDrpqztlZjrr4DroZwg7ZWt7IOBIO2YuOy2nAogICAgICAgIGlmIGRyeV9ydW46CiAgICAgICAgICAgIG5lZWRzX2FjdGlvbiA9IFRydWUKICAgICAgICBlbHNlOgogICAgICAgICAgICB0cnk6CiAgICAgICAgICAgICAgICBuZWVkc19hY3Rpb24gPSBfY2hlY2tfbmVlZHNfYWN0aW9uKGJyb2tlciwgVEFLRV9QUk9GSVRfUENULCBTVE9QX0xPU1NfUENULCBNQVhfUE9TSVRJT05TKQogICAgICAgICAgICBleGNlcHQgRXhjZXB0aW9uIGFzIGU6CiAgICAgICAgICAgICAgICBsb2dnZXIud2FybmluZygi7IKs7KCEIOyytO2BrCDsmKTrpZggKEdlbWluaSDtj7TrsLEpOiAlcyIsIGUpCiAgICAgICAgICAgICAgICBuZWVkc19hY3Rpb24gPSBUcnVlCgogICAgICAgIGlmIG5lZWRzX2FjdGlvbjoKICAgICAgICAgICAgIyBza2lwX2xvZz1GYWxzZTog66Oo7ZSE66eI64ukIOymieyLnCDquLDroZ0gKEpvYuydtCDspJHqsITsl5Aga2lsbCDrkJjslrTrj4Qg67O07KG0KQogICAgICAgICAgICByZXN1bHQgPSBhZ2VudC5ydW4oY2FuY2VsX3BlbmRpbmc9KGkgPT0gMCksIHNraXBfbG9nPUZhbHNlLCBzaW1fZGF0ZXRpbWU9c2ltX2R0KQogICAgICAgICAgICBsb2dnZXIuaW5mbygi7JeQ7J207KCE7Yq4IOqysOqzvDpcbiVzIiwgcmVzdWx0KQogICAgICAgICAgICBpZiBpID09IDA6CiAgICAgICAgICAgICAgICBwcmludCgiXG4iICsgIj0iICogNjApCiAgICAgICAgICAgICAgICBpZiBkcnlfcnVuOgogICAgICAgICAgICAgICAgICAgIHByaW50KCLimqDvuI8gIERSWS1SVU4g66qo65OcOiDsi6TsoJwg7KO866y47J20IOyLpO2WieuQmOyngCDslYrslZjsirXri4jri6QuIikKICAgICAgICAgICAgICAgIHByaW50KHJlc3VsdCkKICAgICAgICAgICAgICAgIHByaW50KCI9IiAqIDYwKQoKICAgICAgICBpZiBpIDwgSU5ORVJfTE9PUF9DT1VOVCAtIDE6CiAgICAgICAgICAgIGxvZ2dlci5pbmZvKCIlZOy0iCDrjIDquLAg7KSRLi4uIiwgSU5ORVJfTE9PUF9TTEVFUF9TRUMpCiAgICAgICAgICAgIHRpbWUuc2xlZXAoSU5ORVJfTE9PUF9TTEVFUF9TRUMpCgogICAgbG9nZ2VyLmluZm8oIj0iICogNjApCgoKZGVmIG1haW4oKToKICAgIHBhcnNlciA9IGFyZ3BhcnNlLkFyZ3VtZW50UGFyc2VyKGRlc2NyaXB0aW9uPSJnYXlhc3RvY2sg7Yq466CI7J2065SpIOyXkOydtOyghO2KuCIpCiAgICBwYXJzZXIuYWRkX2FyZ3VtZW50KCItLW9uY2UiLCBhY3Rpb249InN0b3JlX3RydWUiLCBoZWxwPSIx7ZqMIOymieyLnCDsi6Ttlokg7ZuEIOyiheujjCIpCiAgICBwYXJzZXIuYWRkX2FyZ3VtZW50KCItLWRyeS1ydW4iLCBhY3Rpb249InN0b3JlX3RydWUiLCBoZWxwPSLsi5zrrqzroIjsnbTshZgg66qo65OcICjsi6TsoJwg7KO866y4IOyXhuydjCkiKQogICAgYXJncyA9IHBhcnNlci5wYXJzZV9hcmdzKCkKCiAgICBpZiBhcmdzLmRyeV9ydW46CiAgICAgICAgb3MuZW52aXJvblsiRFJZX1JVTiJdID0gInRydWUiCiAgICAgICAgbG9nZ2VyLmluZm8oIkRSWS1SVU4g66qo65OcIO2ZnOyEse2ZlCDigJQg7Iuk7KCcIOyjvOusuOydtCDsi6TtlonrkJjsp4Ag7JWK7Iq164uI64ukLiIpCgogICAgaWYgYXJncy5vbmNlOgogICAgICAgIHJ1bl90cmFkaW5nKCkKICAgICAgICByZXR1cm4KCiAgICBsb2dnZXIuaW5mbygi7Iqk7LyA7KSE65+sIOuqqOuTnCDigJQgQ2xvdWQgUnVuIEpvYiDrsKnsi50g6raM7J6lLCDsp4HsoJEg66Oo7ZSE64qUIOqwnOuwnOyaqSIpCiAgICBsYXN0X3J1bl9pZCA9ICIiCiAgICB3aGlsZSBUcnVlOgogICAgICAgIG5vd19rc3QgPSBnZXRfbm93X2tzdCgpCiAgICAgICAgcnVuX2lkID0gbm93X2tzdC5zdHJmdGltZSgiJVktJW0tJWQgJUg6JU0iKQogICAgICAgIGlmIGxhc3RfcnVuX2lkICE9IHJ1bl9pZCBhbmQgbm93X2tzdC5taW51dGUgJSAxMSA9PSAwOgogICAgICAgICAgICBydW5fdHJhZGluZygpCiAgICAgICAgICAgIGxhc3RfcnVuX2lkID0gcnVuX2lkCiAgICAgICAgdGltZS5zbGVlcCgzMCkKCgppZiBfX25hbWVfXyA9PSAiX19tYWluX18iOgogICAgbWFpbigpCg==
+"""
+gayastock - 거래량 모멘텀 + VWAP 국내 주식 트레이딩 에이전트
+실행: python main.py --once        # 1회 즉시 실행 (내부 루프 포함)
+      python main.py --dry-run     # 시뮬레이션 모드
+"""
+import argparse
+import logging
+import os
+import time
+from data.utils import get_now_kst
+
+logging.Formatter.converter = lambda *args: get_now_kst().timetuple()
+
+_log_dir = os.environ.get("LOG_DIR", "logs")
+os.makedirs(_log_dir, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(os.path.join(_log_dir, "trading.log"), encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+
+def is_trading_day() -> bool:
+    import holidays
+    today = get_now_kst().date()
+    if today.weekday() >= 5:
+        return False
+    kr_holidays = holidays.Korea(years=today.year)
+    return today not in kr_holidays
+
+
+def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float, max_positions: int) -> bool:
+    """Python 사전 체크: TP/SL 조건 또는 빈 슬롯 여부. True면 Gemini 호출 필요."""
+    portfolio = broker.get_balance()
+    holdings = portfolio.get("holdings", [])
+
+    for h in holdings:
+        rate = h.get("profit_loss_rate", 0)
+        if rate >= take_profit_pct or rate <= -stop_loss_pct:
+            logger.info("TP/SL 조건 해당: %s %.2f%% → Gemini 호출", h.get("ticker"), rate)
+            return True
+
+    if len(holdings) < max_positions:
+        logger.info("빈 슬롯 있음 (%d/%d) → Gemini 호출", len(holdings), max_positions)
+        return True
+
+    logger.info("포지션 풀, TP/SL 없음 → Gemini 스킵")
+    return False
+
+
+def run_trading():
+    if not is_trading_day():
+        logger.info("오늘은 휴장일(공휴일/주말)입니다. 건너뜁니다.")
+        return
+
+    from agent.trader import TradingAgent
+    from agent.tools import _broker
+    from config import (
+        TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
+        INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
+    )
+
+    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    agent = TradingAgent()
+    broker = _broker()
+
+    logger.info("=" * 60)
+    logger.info(
+        "트레이딩 세션 시작 — 루프 %d회 / 슬립 %d초%s",
+        INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
+        "  [DRY-RUN]" if dry_run else "",
+    )
+
+    # dry-run + 장외 시간일 때만 1회차 조건 강제
+    sim_dt = None
+    if dry_run:
+        from agent.trader import _SCHEDULE_SLOTS
+        from datetime import datetime as _dt, time as _dtime
+        now_kst = get_now_kst()
+        market_open = _dtime(9, 0)
+        market_close = _dtime(15, 30)
+        in_market = market_open <= now_kst.time() <= market_close
+        if not in_market:
+            first_slot = _SCHEDULE_SLOTS[0][0]
+            sim_dt = _dt(now_kst.year, now_kst.month, now_kst.day,
+                         first_slot.hour, first_slot.minute,
+                         tzinfo=now_kst.tzinfo)
+            logger.info("DRY-RUN 장외: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%H:%M"))
+        else:
+            logger.info("DRY-RUN 장중: 실제 시각 기준 회차 사용 (%s)", now_kst.strftime("%H:%M"))
+
+    for i in range(INNER_LOOP_COUNT):
+        logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
+
+        # dry-run은 sim 포트폴리오를 agent가 관리하므로 항상 호출
+        if dry_run:
+            needs_action = True
+        else:
+            try:
+                needs_action = _check_needs_action(broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS)
+            except Exception as e:
+                logger.warning("사전 체크 오류 (Gemini 폴백): %s", e)
+                needs_action = True
+
+        if needs_action:
+            # skip_log=False: 루프마다 즉시 기록 (Job이 중간에 kill 되어도 보존)
+            result = agent.run(cancel_pending=(i == 0), skip_log=False, sim_datetime=sim_dt)
+            logger.info("에이전트 결과:\n%s", result)
+            if i == 0:
+                print("\n" + "=" * 60)
+                if dry_run:
+                    print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
+                print(result)
+                print("=" * 60)
+
+        if i < INNER_LOOP_COUNT - 1:
+            logger.info("%d초 대기 중...", INNER_LOOP_SLEEP_SEC)
+            time.sleep(INNER_LOOP_SLEEP_SEC)
+
+    logger.info("=" * 60)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="gayastock 트레이딩 에이전트")
+    parser.add_argument("--once", action="store_true", help="1회 즉시 실행 후 종료")
+    parser.add_argument("--dry-run", action="store_true", help="시뮬레이션 모드 (실제 주문 없음)")
+    args = parser.parse_args()
+
+    if args.dry_run:
+        os.environ["DRY_RUN"] = "true"
+        logger.info("DRY-RUN 모드 활성화 — 실제 주문이 실행되지 않습니다.")
+
+    if args.once:
+        run_trading()
+        return
+
+    logger.info("스케줄러 모드 — Cloud Run Job 방식 권장, 직접 루프는 개발용")
+    last_run_id = ""
+    while True:
+        now_kst = get_now_kst()
+        run_id = now_kst.strftime("%Y-%m-%d %H:%M")
+        if last_run_id != run_id and now_kst.minute % 11 == 0:
+            run_trading()
+            last_run_id = run_id
+        time.sleep(30)
+
+
+if __name__ == "__main__":
+    main()
