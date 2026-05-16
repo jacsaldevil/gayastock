@@ -665,14 +665,23 @@ if page == "포트폴리오":
 
         _time.sleep(3)
         st.rerun()
-    else:
-        _now_kst = get_now_kst()
-        _live = (
-            _now_kst.weekday() < 5 and
-            _now_kst.date() not in _hol.Korea(years=[_now_kst.year]) and
-            _dtime(9, 0) <= _now_kst.time() <= _dtime(15, 30)
-        )
-        with st.expander("▶ 에이전트 실행", expanded=False):
+
+    _now_kst = get_now_kst()
+    _live = (
+        _now_kst.weekday() < 5 and
+        _now_kst.date() not in _hol.Korea(years=[_now_kst.year]) and
+        _dtime(9, 0) <= _now_kst.time() <= _dtime(15, 30)
+    )
+    with st.expander("▶ 에이전트 실행", expanded=False):
+        if _prog_active:
+            _block_src = "스케줄" if _prog.get("source") == "scheduled" else "대시보드"
+            _block_loop = _prog.get("current_loop", 0)
+            _block_tot = _prog.get("total_loops", 5)
+            st.warning(
+                f"⚠️ 에이전트가 이미 실행 중입니다 ({_block_src} — 루프 {_block_loop}/{_block_tot})\n\n"
+                "현재 실행이 완료될 때까지 새로운 실행을 시작할 수 없습니다."
+            )
+        else:
             _pw = st.text_input("비밀번호", type="password", key="portfolio_run_pw")
             if _pw and _pw != "1018":
                 st.error("비밀번호가 올바르지 않습니다.")
