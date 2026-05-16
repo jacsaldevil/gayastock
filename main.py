@@ -115,9 +115,7 @@ def run_trading():
             logger.info("DRY-RUN 장중: 실제 시각 기준 회차 사용 (%s)", now_kst.strftime("%H:%M"))
 
     for i in range(INNER_LOOP_COUNT):
-        is_first = (i == 0)
-        logger.info("--- 루프 %d/%d [%s] ---", i + 1, INNER_LOOP_COUNT,
-                    "전체 스캔" if is_first else "빠른 점검(매수·매도)")
+        logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
 
         # dry-run은 sim 포트폴리오를 agent가 관리하므로 항상 호출
         if dry_run:
@@ -133,13 +131,12 @@ def run_trading():
 
         if needs_action:
             result = agent.run(
-                cancel_pending=is_first,
+                cancel_pending=(i == 0),
                 skip_log=False,
                 sim_datetime=sim_dt,
-                light_mode=not is_first,
             )
             logger.info("에이전트 결과:\n%s", result)
-            if is_first:
+            if i == 0:
                 print("\n" + "=" * 60)
                 if dry_run:
                     print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
@@ -147,10 +144,8 @@ def run_trading():
                 print("=" * 60)
 
         if i < INNER_LOOP_COUNT - 1:
-            # 첫 루프 후는 INNER_LOOP_SLEEP_SEC, 이후 루프 사이는 30초
-            sleep_sec = INNER_LOOP_SLEEP_SEC if is_first else 30
-            logger.info("%d초 대기 중...", sleep_sec)
-            time.sleep(sleep_sec)
+            logger.info("30초 대기 중...")
+            time.sleep(30)
 
     logger.info("=" * 60)
 

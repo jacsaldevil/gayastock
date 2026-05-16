@@ -96,7 +96,6 @@ class TradingAgent:
         cancel_pending: bool = True,
         skip_log: bool = False,
         on_tool_call: callable = None,
-        light_mode: bool = False,
     ) -> str:
         self.tool_call_log = []
         self.buy_tickers: list[str] = []
@@ -118,33 +117,17 @@ class TradingAgent:
             today = now.strftime("%Y-%m-%d %H:%M")
             run_ctx = _get_run_context(now)
 
-            if light_mode:
-                # 빠른 점검 — Google Search 없이 실행, 매수·매도 모두 허용
-                model = self._model_no_search
-                user_message = (
-                    f"[{today}] {run_ctx} — 빠른 점검\n"
-                    "현재 포트폴리오를 점검하고 하이킨아시·VWAP 기준으로 매매를 결정합니다.\n\n"
-                    "1. get_portfolio()로 현재 포트폴리오를 확인하세요.\n"
-                    f"2. 수익률 +{TAKE_PROFIT_PCT}% 이상인 종목은 즉시 전량 매도(익절)하세요.\n"
-                    f"3. 수익률 -{STOP_LOSS_PCT}% 이하인 종목은 즉시 전량 매도(손절)하세요.\n"
-                    "4. get_top_volume_stocks(n=20)으로 거래량 Top20 스캔 후 하이킨아시·VWAP 기준으로 진입 종목을 선정하세요.\n"
-                    "5. 분석 결과를 간결하게 요약하세요."
-                )
-                logger.info("에이전트 빠른 점검 모드 시작 (매수·매도 모두 허용)")
-            else:
-                # 전체 스캔 — Google Search Grounding은 1회차(오전 진입)에만 사용
-                is_first_run = "1회차" in run_ctx
-                model = self._model_with_search if is_first_run else self._model_no_search
-                user_message = (
-                    f"[{today}] {run_ctx}\n"
-                    "트레이딩을 시작합니다.\n\n"
-                    "1. 현재 포트폴리오를 확인하세요.\n"
-                    "2. TP/SL 조건 해당 종목을 즉시 처리하세요.\n"
-                    "3. get_top_volume_stocks(n=30)으로 거래량 Top30 스캔 후 ETF/스팩 제외, 상위 10종목 선정하세요.\n"
-                    "4. 각 종목의 현재가와 하이킨아시 패턴을 확인하고 매수/보류를 판단하세요.\n"
-                    "5. 분석 결과와 판단 근거를 최종 보고서 형식으로 작성하세요."
-                )
-                logger.info(f"에이전트 full mode 시작 (Google Search: {'ON' if is_first_run else 'OFF'})")
+            model = self._model_no_search
+            user_message = (
+                f"[{today}] {run_ctx}\n"
+                "현재 포트폴리오를 점검하고 하이킨아시·VWAP 기준으로 매매를 결정합니다.\n\n"
+                "1. get_portfolio()로 현재 포트폴리오를 확인하세요.\n"
+                f"2. 수익률 +{TAKE_PROFIT_PCT}% 이상인 종목은 즉시 전량 매도(익절)하세요.\n"
+                f"3. 수익률 -{STOP_LOSS_PCT}% 이하인 종목은 즉시 전량 매도(손절)하세요.\n"
+                "4. get_top_volume_stocks(n=20)으로 거래량 Top20 스캔 후 하이킨아시·VWAP 기준으로 진입 종목을 선정하세요.\n"
+                "5. 분석 결과를 간결하게 요약하세요."
+            )
+            logger.info("에이전트 시작")
             try:
                 chat = model.start_chat(response_validation=False)
                 response = chat.send_message(user_message)
