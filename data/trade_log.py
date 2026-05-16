@@ -115,13 +115,15 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
     }, max_records=_MAX_TRADE_RECORDS)
 
 
-def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict, buy_tickers: list = None):
+def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict,
+                  buy_tickers: list = None, loops: list = None):
     _append(_AGENT_BLOB, AGENT_LOG_FILE, {
         "ts": get_now_kst().isoformat(),
         "watchlist": watchlist,
         "summary": summary,
         "portfolio": portfolio_snapshot,
         "buy_tickers": buy_tickers or [],
+        "loops": loops or [],
     }, max_records=_MAX_AGENT_RECORDS)
 
 

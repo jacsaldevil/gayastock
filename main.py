@@ -35,8 +35,9 @@ def is_trading_day() -> bool:
 
 
 def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
-                        max_positions: int) -> bool:
-    """Python 사전 체크: TP/SL, 빈 슬롯, HA/VWAP 이탈 여부. True면 Gemini 호출 필요."""
+                        max_positions: int) -> tuple[bool, list[dict]]:
+    """Python 사전 체크. (needs_action, ha_signals) 반환."""
+    ha_signals = []
     portfolio = broker.get_balance()
     holdings = portfolio.get("holdings", [])
 
@@ -44,11 +45,11 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
         rate = h.get("profit_loss_rate", 0)
         if rate >= take_profit_pct or rate <= -stop_loss_pct:
             logger.info("TP/SL 조건 해당: %s %.2f%% → Gemini 호출", h.get("ticker"), rate)
-            return True
+            return True, ha_signals
 
     if len(holdings) < max_positions:
         logger.info("빈 슬롯 있음 (%d/%d) → Gemini 호출", len(holdings), max_positions)
-        return True
+        return True, ha_signals
 
     # 포지션 풀 — 보유 종목 HA/VWAP 이탈 체크 (매도 신호 감지)
     for h in holdings:
@@ -62,15 +63,23 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
             if not candles:
                 continue
             latest = candles[-1]
+            signal = {
+                "ticker": ticker,
+                "name": result.get("name", ""),
+                "pattern": latest.get("pattern", ""),
+                "vwap_dev": round(float(vwap_dev), 2),
+                "bullish": latest.get("bullish", True),
+            }
+            ha_signals.append(signal)
             if not latest.get("bullish", True) or vwap_dev < 0:
                 logger.info("HA/VWAP 이탈: %s pattern=%s vwap=%.2f%% → Gemini 호출",
                             ticker, latest.get("pattern"), vwap_dev)
-                return True
+                return True, ha_signals
         except Exception as e:
             logger.warning("HA/VWAP 체크 실패 %s: %s", ticker, e)
 
     logger.info("포지션 풀, TP/SL 없음, HA/VWAP 정상 → Gemini 스킵")
-    return False
+    return False, ha_signals
 
 
 def run_trading():
@@ -80,6 +89,7 @@ def run_trading():
 
     from agent.trader import TradingAgent
     from agent.tools import _broker
+    from data.trade_log import log_agent_run
     from config import (
         TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
         INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
@@ -114,17 +124,21 @@ def run_trading():
         else:
             logger.info("DRY-RUN 장중: 실제 시각 기준 회차 사용 (%s)", now_kst.strftime("%H:%M"))
 
+    session_log: list[dict] = []
+    all_buy_tickers: list[str] = []
+
     for i in range(INNER_LOOP_COUNT):
         logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
+        loop_entry: dict = {"loop": i + 1, "ha_signals": [], "result": None}
 
-        # dry-run은 sim 포트폴리오를 agent가 관리하므로 항상 호출
         if dry_run:
             needs_action = True
         else:
             try:
-                needs_action = _check_needs_action(
+                needs_action, ha_signals = _check_needs_action(
                     broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
                 )
+                loop_entry["ha_signals"] = ha_signals
             except Exception as e:
                 logger.warning("사전 체크 오류 (Gemini 폴백): %s", e)
                 needs_action = True
@@ -132,21 +146,40 @@ def run_trading():
         if needs_action:
             result = agent.run(
                 cancel_pending=(i == 0),
-                skip_log=False,
+                skip_log=True,
                 sim_datetime=sim_dt,
             )
+            loop_entry["result"] = result
+            all_buy_tickers.extend(agent.buy_tickers)
             logger.info("에이전트 결과:\n%s", result)
-            if i == 0:
-                print("\n" + "=" * 60)
-                if dry_run:
-                    print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
-                print(result)
-                print("=" * 60)
+
+        session_log.append(loop_entry)
 
         if i < INNER_LOOP_COUNT - 1:
             logger.info("30초 대기 중...")
             time.sleep(30)
 
+    # 세션 최종 요약 — LLM 1회 호출로 전체 정리
+    logger.info("=" * 60)
+    logger.info("세션 최종 요약 생성 중...")
+    final_summary = agent.summarize_session(session_log)
+    logger.info("최종 요약:\n%s", final_summary)
+    try:
+        portfolio_snapshot = broker.get_balance()
+    except Exception:
+        portfolio_snapshot = {}
+    log_agent_run(
+        watchlist=None,
+        summary=final_summary,
+        portfolio_snapshot=portfolio_snapshot,
+        buy_tickers=list(dict.fromkeys(all_buy_tickers)),
+        loops=session_log,
+    )
+    print("\n" + "=" * 60)
+    if dry_run:
+        print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
+    print(final_summary)
+    print("=" * 60)
     logger.info("=" * 60)
 
 

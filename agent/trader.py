@@ -210,3 +210,55 @@ class TradingAgent:
         finally:
             self.sim_portfolio_out = get_sim_portfolio()
             set_sim_portfolio(None)
+
+    def summarize_session(self, session_log: list[dict]) -> str:
+        """5회 루프 결과를 바탕으로 세션 최종 요약 생성 (LLM 1회 호출)."""
+        parts = []
+        for entry in session_log:
+            loop_num = entry["loop"]
+            ha_signals = entry.get("ha_signals", [])
+            result = entry.get("result") or "신호 없음 — 스킵"
+
+            ha_text = ""
+            if ha_signals:
+                items = [
+                    f"{s['ticker']}({s.get('name', '')}) HA={s['pattern']} VWAP={s['vwap_dev']:+.1f}%"
+                    for s in ha_signals
+                ]
+                ha_text = f"\n  [HA/VWAP] {' | '.join(items)}"
+
+            parts.append(f"【루프 {loop_num}】{ha_text}\n{result[:600]}")
+
+        session_text = "\n\n".join(parts)
+        prompt = (
+            f"다음은 이번 트레이딩 세션(총 {len(session_log)}회 루프)의 실행 결과입니다:\n\n"
+            f"{session_text}\n\n"
+            "1. get_portfolio()로 최종 포트폴리오 상태를 확인하세요.\n"
+            "2. 이번 세션의 매매 내역(매수/매도 종목, 이유)을 정리하세요.\n"
+            "3. 현재 보유 종목의 HA 패턴과 VWAP 상태를 간략히 평가하세요.\n"
+            "4. 다음 세션에서 주의할 점을 한 줄로 작성하세요."
+        )
+        try:
+            chat = self._model_no_search.start_chat(response_validation=False)
+            response = chat.send_message(prompt)
+            for _ in range(10):
+                rparts = response.candidates[0].content.parts if response.candidates else []
+                fn_calls = [p for p in rparts if p.function_call is not None]
+                if not fn_calls:
+                    break
+                fn_responses = []
+                for part in fn_calls:
+                    fn = part.function_call
+                    result_str = execute_tool(fn.name, dict(fn.args))
+                    logger.info("요약 Tool: %s", fn.name)
+                    fn_responses.append(
+                        Part.from_function_response(
+                            name=fn.name,
+                            response={"result": result_str},
+                        )
+                    )
+                response = chat.send_message(fn_responses)
+            return response.text or "세션 요약 완료 (텍스트 없음)"
+        except Exception as e:
+            logger.error("세션 요약 LLM 호출 실패: %s", e)
+            return "세션 요약 실패: " + str(e)
