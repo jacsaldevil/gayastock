@@ -72,18 +72,22 @@ def _get_initial_capital() -> int:
 
 
 def _get_sim_datetime(live: bool):
-    """장외 시뮬 실행 시 1회차 조건 강제, 장중이면 None(실제 시각)"""
+    """시뮬(not live): 최근 거래일의 1회차(09:20) 시간으로 강제. 실전: None(실제 시각)."""
     if live:
         return None
     from agent.trader import _SCHEDULE_SLOTS
-    from datetime import datetime as _dt, time as _dtime
-    now_kst = get_now_kst()
-    if _dtime(9, 0) <= now_kst.time() <= _dtime(15, 30):
-        return None
+    import holidays as _hol
     first_slot = _SCHEDULE_SLOTS[0][0]
-    return _dt(now_kst.year, now_kst.month, now_kst.day,
-               first_slot.hour, first_slot.minute,
-               tzinfo=now_kst.tzinfo)
+    now_kst = get_now_kst()
+    check = now_kst.date()
+    kr_hol = _hol.Korea(years=check.year)
+    for _ in range(7):
+        if check.weekday() < 5 and check not in kr_hol:
+            break
+        check -= timedelta(days=1)
+    return datetime(check.year, check.month, check.day,
+                    first_slot.hour, first_slot.minute,
+                    tzinfo=now_kst.tzinfo)
 
 st.set_page_config(
     page_title="gayastock 대시보드",
