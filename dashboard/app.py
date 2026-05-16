@@ -319,9 +319,162 @@ def _sim_delete(sim_id: str):
     _sim_save_index([x for x in _sim_load_index() if x["id"] != sim_id])
 
 
+_PROGRESS_BLOB = "session_progress.json"
+_PROGRESS_LOCAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "session_progress.json")
+
+
+def _load_session_progress() -> dict:
+    """GCS 또는 로컬에서 세션 진행상황 읽기 (스케줄/대시보드 공용)."""
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_PROGRESS_BLOB)
+            if blob.exists():
+                data = json.loads(blob.download_as_text())
+                if data.get("status") in ("running", "summarizing", "llm_running"):
+                    try:
+                        started = datetime.fromisoformat(data["started_at"])
+                        if started.tzinfo is None:
+                            started = started.replace(tzinfo=KST)
+                        if (get_now_kst() - started).total_seconds() > 1200:
+                            return {}
+                    except Exception:
+                        return {}
+                return data
+        except Exception:
+            pass
+        return {}
+    try:
+        with open(_PROGRESS_LOCAL, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _write_session_progress(data: dict):
+    """대시보드 실행 진행상황을 GCS/로컬에 기록."""
+    try:
+        os.makedirs(os.path.dirname(_PROGRESS_LOCAL), exist_ok=True)
+        with open(_PROGRESS_LOCAL, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            storage.Client().bucket(_GCS_DATA_BUCKET).blob(_PROGRESS_BLOB).upload_from_string(
+                json.dumps(data, ensure_ascii=False), content_type="application/json"
+            )
+        except Exception:
+            pass
+
+
 def _run_agent_bg(sim_id: str, live: bool):
-    """백그라운드 스레드: 에이전트 1회 실행, tool call마다 중간 결과 저장"""
-    def _mark_done_in_index(finished_at):
+    """백그라운드 스레드: 5루프 에이전트 실행, 루프마다 진행상황 기록."""
+    from config import INNER_LOOP_COUNT, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS
+    from agent.trader import TradingAgent
+    from agent.tools import _broker
+    from data.trade_log import log_agent_run
+
+    if not live:
+        os.environ["DRY_RUN"] = "true"
+
+    now = get_now_kst()
+    progress: dict = {
+        "session_id": sim_id,
+        "source": "dashboard",
+        "mode": "dry_run" if not live else "live",
+        "status": "running",
+        "started_at": now.isoformat(),
+        "total_loops": INNER_LOOP_COUNT,
+        "current_loop": 0,
+        "loops": [],
+    }
+    _write_session_progress(progress)
+
+    data: dict = {"id": sim_id, "status": "running", "created_at": now.isoformat(), "loops": []}
+    _sim_save_data(sim_id, data)
+
+    try:
+        agent = TradingAgent()
+        broker = _broker()
+        session_log: list[dict] = []
+        all_buy_tickers: list[str] = []
+
+        for i in range(INNER_LOOP_COUNT):
+            loop_entry: dict = {"loop": i + 1, "ha_signals": [], "result": None, "tool_log": []}
+            loop_p: dict = {"loop": i + 1, "status": "checking", "ha_signals": [], "needs_action": False}
+            progress["current_loop"] = i + 1
+            progress["loops"].append(loop_p)
+            _write_session_progress(progress)
+
+            if not live:
+                needs_action = True
+            else:
+                try:
+                    needs_action, ha_signals = _check_needs_action_dashboard(
+                        broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
+                    )
+                    loop_entry["ha_signals"] = ha_signals
+                    loop_p["ha_signals"] = ha_signals
+                except Exception:
+                    needs_action = True
+
+            loop_p["needs_action"] = needs_action
+            if needs_action:
+                loop_p["status"] = "llm_running"
+                _write_session_progress(progress)
+
+                def _on_tool_call(tool_log, _lp=loop_p, _le=loop_entry):
+                    _lp["tool_log"] = tool_log[-10:]
+                    _le["tool_log"] = tool_log
+                    _write_session_progress(progress)
+                    _sim_save_data(sim_id, data)
+
+                result = agent.run(
+                    cancel_pending=(i == 0),
+                    skip_log=True,
+                    sim_datetime=_get_sim_datetime(live),
+                    on_tool_call=_on_tool_call,
+                )
+                loop_entry["result"] = result
+                loop_p["result_preview"] = (result or "")[:300]
+                all_buy_tickers.extend(agent.buy_tickers)
+
+            loop_p["status"] = "done"
+            data["loops"].append(loop_entry)
+            _write_session_progress(progress)
+            _sim_save_data(sim_id, data)
+            session_log.append(loop_entry)
+
+            if i < INNER_LOOP_COUNT - 1:
+                import time as _t
+                _t.sleep(5)
+
+        # 세션 최종 요약
+        progress["status"] = "summarizing"
+        _write_session_progress(progress)
+        final_summary = agent.summarize_session(session_log)
+        data["final_summary"] = final_summary
+        try:
+            portfolio_snapshot = broker.get_balance()
+        except Exception:
+            portfolio_snapshot = {}
+        log_agent_run(None, final_summary, portfolio_snapshot,
+                      list(dict.fromkeys(all_buy_tickers)), session_log)
+
+    except Exception as e:
+        data["error"] = str(e)
+        progress["status"] = "done"
+    finally:
+        os.environ["DRY_RUN"] = "false"
+        finished_at = get_now_kst().isoformat()
+        data["status"] = "done"
+        data["finished_at"] = finished_at
+        progress["status"] = "done"
+        progress["finished_at"] = finished_at
+        _sim_save_data(sim_id, data)
+        _write_session_progress(progress)
         idx = _sim_load_index()
         entry = next((x for x in idx if x["id"] == sim_id), None)
         if entry:
@@ -329,42 +482,51 @@ def _run_agent_bg(sim_id: str, live: bool):
             entry["finished_at"] = finished_at
         _sim_save_index(idx)
 
-    if not live:
-        os.environ["DRY_RUN"] = "true"
-    data: dict = {
-        "id": sim_id, "status": "running",
-        "created_at": get_now_kst().isoformat(), "results": {},
-    }
-    _sim_save_data(sim_id, data)
-    try:
-        from agent.trader import TradingAgent
-        agent = TradingAgent()
 
-        def _on_tool_call(tool_log):
-            data["results"]["분석"] = {"result": "⏳ 분석 중...", "tool_log": tool_log}
-            _sim_save_data(sim_id, data)
+def _check_needs_action_dashboard(broker, take_profit_pct, stop_loss_pct, max_positions):
+    """대시보드 백그라운드 스레드용 사전 체크 (main._check_needs_action과 동일 로직)."""
+    portfolio = broker.get_balance()
+    holdings = portfolio.get("holdings", [])
+    ha_signals = []
 
-        result = agent.run(
-            [], sim_datetime=_get_sim_datetime(live),
-            sim_portfolio_in=None, skip_log=False,
-            on_tool_call=_on_tool_call,
-        )
-        data["results"]["분석"] = {"result": result, "tool_log": agent.tool_call_log}
-        _sim_save_data(sim_id, data)
-    except Exception as e:
-        data["results"]["분석"] = {"result": f"❌ 실행 오류: {e}", "tool_log": []}
-        _sim_save_data(sim_id, data)
-    finally:
-        os.environ["DRY_RUN"] = "false"
-        data["status"] = "done"
-        data["finished_at"] = get_now_kst().isoformat()
-        _sim_save_data(sim_id, data)
-        _mark_done_in_index(data["finished_at"])
+    for h in holdings:
+        rate = h.get("profit_loss_rate", 0)
+        if rate >= take_profit_pct or rate <= -stop_loss_pct:
+            return True, ha_signals
+
+    if len(holdings) < max_positions:
+        return True, ha_signals
+
+    for h in holdings:
+        ticker = h.get("ticker", "")
+        if not ticker:
+            continue
+        try:
+            result = broker.get_minute_candles(ticker)
+            candles = result.get("candles", [])
+            vwap_dev = result.get("vwap_deviation_pct", 0)
+            if not candles:
+                continue
+            latest = candles[-1]
+            signal = {
+                "ticker": ticker,
+                "name": result.get("name", ""),
+                "pattern": latest.get("pattern", ""),
+                "vwap_dev": round(float(vwap_dev), 2),
+                "bullish": latest.get("bullish", True),
+            }
+            ha_signals.append(signal)
+            if not latest.get("bullish", True) or vwap_dev < 0:
+                return True, ha_signals
+        except Exception:
+            pass
+    return False, ha_signals
 
 
 def _launch_agent(live: bool) -> str | None:
     """에이전트를 백그라운드로 실행하고 sim_id 반환. 이미 실행 중이면 None."""
-    if next((x for x in _sim_load_index() if x.get("status") == "running"), None):
+    _existing = _load_session_progress()
+    if _existing.get("status") in ("running", "summarizing"):
         return None
     _now = get_now_kst()
     sim_id = _now.strftime("%Y%m%d_%H%M%S")
@@ -382,43 +544,6 @@ def _launch_agent(live: bool) -> str | None:
     threading.Thread(target=_run_agent_bg, args=(sim_id, live), daemon=True).start()
     return sim_id
 
-
-def _show_sim_results(sim_data: dict):
-    import time as _time
-    status = sim_data.get("status", "")
-    finished_disp = (sim_data.get("finished_at") or "")[:16].replace("T", " ")
-    results = sim_data.get("results", {})
-
-    if status == "running":
-        entry = list(results.values())[0] if results else {}
-        tool_log = entry.get("tool_log", [])
-        if tool_log:
-            st.warning(f"⏳ 실행 중... — 도구 호출 {len(tool_log)}회 완료")
-            with st.expander(f"📡 실시간 호출 로그 ({len(tool_log)}회)", expanded=True):
-                for e in reversed(tool_log[-10:]):
-                    args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
-                    st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
-                    st.code(e["result_preview"], language="json")
-        else:
-            st.warning("⏳ 실행 중... — Gemini 연결 중 (잠시 후 자동 갱신)")
-        _time.sleep(3)
-        st.rerun()
-    elif status == "done":
-        st.success(f"✅ 완료 — {finished_disp}")
-
-    if not results:
-        return
-    entry = list(results.values())[0]
-    result_text = entry.get("result", "결과 없음")
-    if result_text != "⏳ 분석 중...":
-        st.markdown(result_text)
-    tool_log = entry.get("tool_log", [])
-    if tool_log and status == "done":
-        with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)"):
-            for e in tool_log:
-                args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
-                st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
-                st.code(e["result_preview"], language="json")
 
 
 # ════════════════════════════════════════════════════════
@@ -467,34 +592,77 @@ if page == "포트폴리오":
     import holidays as _hol
     from datetime import time as _dtime
 
-    _idx = _sim_load_index()
-    _running = next((x for x in _idx if x.get("status") == "running"), None)
+    _prog = _load_session_progress()
+    _prog_active = _prog.get("status") in ("running", "summarizing")
 
     st.divider()
 
-    if _running:
-        _sim = _sim_load_data(_running["id"])
-        _results = _sim.get("results", {})
-        _entry = list(_results.values())[0] if _results else {}
-        _tool_log = _entry.get("tool_log", [])
-        _created = (_running.get("created_at") or "")[:16].replace("T", " ")
-        _mode_label = "🔴 실전" if _running.get("mode") == "실전" else "🧪 시뮬"
+    if _prog_active:
+        _cur = _prog.get("current_loop", 0)
+        _tot = _prog.get("total_loops", 5)
+        _src = _prog.get("source", "scheduled")
+        _mode_label = "🔴 실전" if _prog.get("mode") == "live" else "🧪 시뮬/DRY"
+        _src_label = "대시보드" if _src == "dashboard" else "스케줄"
+        _is_summ = _prog.get("status") == "summarizing"
 
         with st.container(border=True):
             _hcol1, _hcol2 = st.columns([3, 1])
-            _hcol1.markdown(f"**⏳ 에이전트 실행 중 — {_mode_label}** &nbsp; `{_created} 시작`", unsafe_allow_html=True)
-            _hcol2.caption(f"도구 호출 {len(_tool_log)}회")
-            if _tool_log:
-                _last = _tool_log[-1]
-                _last_args = ", ".join(f"{k}={v}" for k, v in _last["args"].items()) if _last["args"] else ""
-                st.caption(f"현재: Round {_last['round']} → `{_last['tool']}({_last_args})`")
-                with st.expander("📡 실시간 호출 로그", expanded=True):
-                    for _e in reversed(_tool_log[-8:]):
-                        _a = ", ".join(f"{k}={v}" for k, v in _e["args"].items()) if _e["args"] else ""
-                        st.markdown(f"**[R{_e['round']}]** `{_e['tool']}({_a})`")
-                        st.code(_e["result_preview"], language="json")
+            _hcol1.markdown(
+                f"**⏳ 에이전트 실행 중 — {_mode_label} ({_src_label})**",
+                unsafe_allow_html=True,
+            )
+            if _is_summ:
+                _hcol2.caption("📝 최종 요약 중...")
             else:
-                st.caption("Gemini 연결 중...")
+                _hcol2.caption(f"루프 {_cur}/{_tot}")
+
+            if not _is_summ and _tot > 0:
+                st.progress(_cur / _tot, text=f"루프 {_cur} / {_tot}")
+
+            _loops = _prog.get("loops", [])
+            for _lp in _loops:
+                _lnum = _lp["loop"]
+                _lst = _lp.get("status", "")
+                _lna = _lp.get("needs_action", False)
+                _lha = _lp.get("ha_signals", [])
+                _ltl = _lp.get("tool_log", [])
+
+                if _lst == "done":
+                    _icon = "✅"
+                elif _lst == "llm_running":
+                    _icon = "🤖"
+                elif _lst == "checking":
+                    _icon = "🔍"
+                else:
+                    _icon = "⬜"
+
+                _ha_str = ""
+                if _lha:
+                    _ha_str = " | ".join(
+                        f"{s['ticker']} HA={s['pattern']} VWAP={s['vwap_dev']:+.1f}%"
+                        for s in _lha
+                    )
+
+                _action_str = ""
+                if _lst == "done":
+                    _action_str = "LLM 호출" if _lna else "스킵"
+                elif _lst == "llm_running":
+                    _last_tool = _ltl[-1] if _ltl else None
+                    if _last_tool:
+                        _targs = ", ".join(f"{k}={v}" for k, v in _last_tool["args"].items()) if _last_tool["args"] else ""
+                        _action_str = f"R{_last_tool['round']} → `{_last_tool['tool']}({_targs})`"
+                    else:
+                        _action_str = "Gemini 연결 중..."
+
+                st.caption(f"{_icon} 루프 {_lnum}: {_action_str}  {_ha_str}")
+
+                if _ltl and _lst == "llm_running":
+                    with st.expander(f"📡 루프 {_lnum} 실시간 호출 ({len(_ltl)}회)", expanded=True):
+                        for _te in reversed(_ltl[-6:]):
+                            _ta = ", ".join(f"{k}={v}" for k, v in _te["args"].items()) if _te["args"] else ""
+                            st.markdown(f"**[R{_te['round']}]** `{_te['tool']}({_ta})`")
+                            st.code(_te["result_preview"], language="json")
+
         _time.sleep(3)
         st.rerun()
     else:
