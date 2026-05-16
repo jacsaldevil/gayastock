@@ -34,8 +34,11 @@ def is_trading_day() -> bool:
     return today not in kr_holidays
 
 
-def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float, max_positions: int) -> bool:
-    """Python 사전 체크: TP/SL 조건 또는 빈 슬롯 여부. True면 Gemini 호출 필요."""
+def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
+                        max_positions: int, light_mode: bool = False) -> bool:
+    """Python 사전 체크: TP/SL 조건 또는 빈 슬롯 여부. True면 Gemini 호출 필요.
+    light_mode=True 시 TP/SL 조건만 체크 (빈 슬롯은 무시 — 신규 매수 불필요).
+    """
     portfolio = broker.get_balance()
     holdings = portfolio.get("holdings", [])
 
@@ -45,11 +48,11 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float, ma
             logger.info("TP/SL 조건 해당: %s %.2f%% → Gemini 호출", h.get("ticker"), rate)
             return True
 
-    if len(holdings) < max_positions:
+    if not light_mode and len(holdings) < max_positions:
         logger.info("빈 슬롯 있음 (%d/%d) → Gemini 호출", len(holdings), max_positions)
         return True
 
-    logger.info("포지션 풀, TP/SL 없음 → Gemini 스킵")
+    logger.info("%s — TP/SL 없음 → Gemini 스킵", "light mode" if light_mode else "포지션 풀")
     return False
 
 
@@ -95,21 +98,30 @@ def run_trading():
             logger.info("DRY-RUN 장중: 실제 시각 기준 회차 사용 (%s)", now_kst.strftime("%H:%M"))
 
     for i in range(INNER_LOOP_COUNT):
-        logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
+        light_mode = (i > 0)  # 첫 루프만 full scan, 이후는 TP/SL 점검 전용
+        logger.info("--- 루프 %d/%d [%s] ---", i + 1, INNER_LOOP_COUNT,
+                    "TP/SL 점검" if light_mode else "전체 스캔")
 
         # dry-run은 sim 포트폴리오를 agent가 관리하므로 항상 호출
         if dry_run:
             needs_action = True
         else:
             try:
-                needs_action = _check_needs_action(broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS)
+                needs_action = _check_needs_action(
+                    broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
+                    light_mode=light_mode,
+                )
             except Exception as e:
                 logger.warning("사전 체크 오류 (Gemini 폴백): %s", e)
                 needs_action = True
 
         if needs_action:
-            # skip_log=False: 루프마다 즉시 기록 (Job이 중간에 kill 되어도 보존)
-            result = agent.run(cancel_pending=(i == 0), skip_log=False, sim_datetime=sim_dt)
+            result = agent.run(
+                cancel_pending=(i == 0),
+                skip_log=False,
+                sim_datetime=sim_dt,
+                light_mode=light_mode,
+            )
             logger.info("에이전트 결과:\n%s", result)
             if i == 0:
                 print("\n" + "=" * 60)
@@ -119,8 +131,10 @@ def run_trading():
                 print("=" * 60)
 
         if i < INNER_LOOP_COUNT - 1:
-            logger.info("%d초 대기 중...", INNER_LOOP_SLEEP_SEC)
-            time.sleep(INNER_LOOP_SLEEP_SEC)
+            # light mode 루프 사이는 30초, 첫 full scan 후는 INNER_LOOP_SLEEP_SEC
+            sleep_sec = 30 if light_mode else INNER_LOOP_SLEEP_SEC
+            logger.info("%d초 대기 중...", sleep_sec)
+            time.sleep(sleep_sec)
 
     logger.info("=" * 60)
 
