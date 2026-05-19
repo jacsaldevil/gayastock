@@ -93,9 +93,8 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
                 "bullish": latest.get("bullish", True),
             }
             ha_signals.append(signal)
-            if not latest.get("bullish", True) or vwap_dev < 0:
-                logger.info("HA/VWAP 이탈: %s pattern=%s vwap=%.2f%% → Gemini 호출",
-                            ticker, latest.get("pattern"), vwap_dev)
+            if vwap_dev < 0:
+                logger.info("VWAP 이탈: %s vwap=%.2f%% → Gemini 호출", ticker, vwap_dev)
                 return True, ha_signals
         except Exception as e:
             logger.warning("HA/VWAP 체크 실패 %s: %s", ticker, e)

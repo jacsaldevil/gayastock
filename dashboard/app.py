@@ -520,7 +520,7 @@ def _check_needs_action_dashboard(broker, take_profit_pct, stop_loss_pct, max_po
                 "bullish": latest.get("bullish", True),
             }
             ha_signals.append(signal)
-            if not latest.get("bullish", True) or vwap_dev < 0:
+            if vwap_dev < 0:
                 return True, ha_signals
         except Exception:
             pass
