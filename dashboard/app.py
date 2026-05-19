@@ -943,8 +943,21 @@ elif page == "매매 이력":
 
             if "name" not in df.columns:
                 df["name"] = ""
-            display_df = df[["ts", "action", "ticker", "name", "quantity", "price", "amount", "success", "reason"]].copy()
-            display_df.columns = ["일시", "구분", "종목코드", "종목명", "수량", "체결가", "금액", "성공", "판단 근거"]
+            if "profit" not in df.columns:
+                df["profit"] = None
+            # 종목명: name이 비어있거나 ticker와 같으면 ticker 표시 (이름 조회 실패 fallback)
+            df["종목명"] = df.apply(
+                lambda r: r["name"] if r["name"] and r["name"] != r["ticker"] else r["ticker"], axis=1
+            )
+            # 실현손익: SELL 행만 표시
+            df["실현손익"] = df.apply(
+                lambda r: f"{'▲' if r['profit'] > 0 else '▼'} ₩{abs(r['profit']):,.0f}"
+                if r["action"] == "SELL" and r["profit"] is not None and r["profit"] != 0
+                else ("" if r["action"] == "BUY" else "-"),
+                axis=1,
+            )
+            display_df = df[["ts", "action", "ticker", "종목명", "실현손익", "quantity", "price", "amount", "success", "reason"]].copy()
+            display_df.columns = ["일시", "구분", "종목코드", "종목명", "실현손익", "수량", "체결가", "금액", "성공", "판단 근거"]
             display_df["일시"] = display_df["일시"].dt.strftime("%Y-%m-%d %H:%M")
             display_df["체결가"] = display_df["체결가"].apply(lambda x: f"₩{x:,.0f}")
             display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")

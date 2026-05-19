@@ -187,6 +187,7 @@ class KISBroker:
             raise ValueError(f"{ticker} 현재가 조회 실패 (거래정지 또는 API 오류)")
         return {
             "ticker": ticker,
+            "name": output.get("hts_kor_isnm", ""),
             "current_price": current_price,
             "open_price": int(output.get("stck_oprc", 0) or 0),
             "high_price": int(output.get("stck_hgpr", 0) or 0),

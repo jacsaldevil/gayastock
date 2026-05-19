@@ -101,8 +101,9 @@ _MAX_TRADE_RECORDS = 1000    # 매매 로그 최대 보존 건수
 _MAX_AGENT_RECORDS = 500     # 에이전트 실행 로그 최대 보존 건수 (20회/일 × 25일)
 
 
-def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool, name: str = ""):
-    _append(_TRADE_BLOB, TRADE_LOG_FILE, {
+def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool,
+              name: str = "", profit: int = 0):
+    record: dict = {
         "ts": get_now_kst().isoformat(),
         "action": action,
         "ticker": ticker,
@@ -112,7 +113,10 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
         "amount": price * quantity,
         "reason": reason,
         "success": success,
-    }, max_records=_MAX_TRADE_RECORDS)
+    }
+    if action == "SELL":
+        record["profit"] = profit
+    _append(_TRADE_BLOB, TRADE_LOG_FILE, record, max_records=_MAX_TRADE_RECORDS)
 
 
 def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict,

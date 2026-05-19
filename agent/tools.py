@@ -250,7 +250,9 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
-            stock_name = price_info.get("name", ticker)
+            stock_name = price_info.get("name", "") or holding.get("name", "") or ticker
+            avg_price = holding.get("avg_price", 0)
+            realized_profit = int((current_price - avg_price) * qty) if avg_price > 0 else 0
 
             if _is_dry_run():
                 if _sim_portfolio is not None:
@@ -275,12 +277,12 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "reason": reason,
                     "dry_run": True,
                 }
-                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
+                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, realized_profit)
             else:
                 result = broker.sell_order(ticker, qty)
                 result["reason"] = reason
                 if result["success"]:
-                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name)
+                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name, realized_profit)
 
         else:
             result = {"error": f"알 수 없는 tool: {tool_name}"}
