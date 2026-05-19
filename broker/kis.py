@@ -373,8 +373,9 @@ class KISBroker:
             profit_loss = holdings_pl if holdings_pl != 0 else (total_eval - cash) - pchs_smtl
 
         return {
-            "cash": cash,
-            "total_eval": total_eval,
+            "cash": cash,             # dnca_tot_amt: 예수금 (주식 매수 가능한 현금)
+            "holdings_eval": scts_evlu,  # scts_evlu_amt: 보유 주식 평가금액
+            "total_eval": total_eval,    # tot_evlu_amt: KIS 총평가 (참고용)
             "profit_loss": profit_loss,
             "holdings": holdings,
         }
