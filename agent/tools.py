@@ -59,15 +59,17 @@ GEMINI_TOOLS = Tool(
             name="buy_stock",
             description=(
                 "주식을 시장가로 매수합니다. "
-                "매수 전 get_portfolio로 예수금, get_stock_price로 현재가를 반드시 확인하세요. "
+                "매수 전 get_portfolio로 예수금, get_heikin_ashi_candles로 VWAP·HA를 반드시 확인하세요. "
                 "포지션 사이징: 가용예수금 × HA강도 비율 ÷ 남은 슬롯 수로 계산하세요."
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "ticker":   {"type": "string",  "description": "6자리 종목코드"},
-                    "quantity": {"type": "integer", "description": "매수 수량 (주)"},
-                    "reason":   {"type": "string",  "description": "매수 근거 (재무지표 수치 포함)"},
+                    "ticker":      {"type": "string",  "description": "6자리 종목코드"},
+                    "quantity":    {"type": "integer", "description": "매수 수량 (주)"},
+                    "reason":      {"type": "string",  "description": "매수 근거 (VWAP 이탈률, HA 패턴, 거래량 순위 포함)"},
+                    "vwap_dev":    {"type": "number",  "description": "매수 시점 VWAP 이탈률 (%) — get_heikin_ashi_candles의 vwap_deviation_pct"},
+                    "ha_pattern":  {"type": "string",  "description": "매수 시점 HA 패턴 — 예: 강한상승, 일반양봉, 음봉 등"},
                 },
                 "required": ["ticker", "quantity", "reason"],
             },
@@ -109,9 +111,11 @@ GEMINI_TOOLS = Tool(
             parameters={
                 "type": "object",
                 "properties": {
-                    "ticker":   {"type": "string",  "description": "6자리 종목코드"},
-                    "quantity": {"type": "integer", "description": "매도 수량 (주)"},
-                    "reason":   {"type": "string",  "description": "매도 근거"},
+                    "ticker":      {"type": "string",  "description": "6자리 종목코드"},
+                    "quantity":    {"type": "integer", "description": "매도 수량 (주)"},
+                    "reason":      {"type": "string",  "description": "매도 근거 (TP/SL/VWAP음수/강제청산 중 명시)"},
+                    "vwap_dev":    {"type": "number",  "description": "매도 시점 VWAP 이탈률 (%) — get_heikin_ashi_candles의 vwap_deviation_pct"},
+                    "ha_pattern":  {"type": "string",  "description": "매도 시점 HA 패턴"},
                 },
                 "required": ["ticker", "quantity", "reason"],
             },
@@ -155,13 +159,15 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             _validate_ticker(ticker)
             qty = int(tool_input["quantity"])
             reason = tool_input.get("reason", "")
+            vwap_dev = tool_input.get("vwap_dev")
+            ha_pattern = tool_input.get("ha_pattern", "")
 
             if qty <= 0:
                 return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
 
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
-            stock_name = price_info.get("name", ticker)
+            stock_name = price_info.get("name", "") or ticker
             total_cost = current_price * qty
 
             if _is_dry_run():
@@ -206,7 +212,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                             "total_cost": total_cost,
                             "dry_run": True,
                         }
-                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
+                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
                 else:
                     result = {
                         "success": True,
@@ -216,19 +222,21 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                         "total_cost": total_cost,
                         "dry_run": True,
                     }
-                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
+                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
             else:
                 result = broker.buy_order(ticker, qty)
                 result["reason"] = reason
                 result["total_cost"] = total_cost
                 if result["success"]:
-                    log_trade("BUY", ticker, qty, current_price, reason, True, stock_name)
+                    log_trade("BUY", ticker, qty, current_price, reason, True, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
 
         elif tool_name == "sell_stock":
             ticker = tool_input["ticker"]
             _validate_ticker(ticker)
             qty = int(tool_input["quantity"])
             reason = tool_input.get("reason", "")
+            vwap_dev = tool_input.get("vwap_dev")
+            ha_pattern = tool_input.get("ha_pattern", "")
 
             if qty <= 0:
                 return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
@@ -277,12 +285,12 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "reason": reason,
                     "dry_run": True,
                 }
-                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, realized_profit)
+                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, realized_profit, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
             else:
                 result = broker.sell_order(ticker, qty)
                 result["reason"] = reason
                 if result["success"]:
-                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name, realized_profit)
+                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name, realized_profit, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
 
         else:
             result = {"error": f"알 수 없는 tool: {tool_name}"}

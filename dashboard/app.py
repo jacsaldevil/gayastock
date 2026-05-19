@@ -945,9 +945,17 @@ elif page == "매매 이력":
                 df["name"] = ""
             if "profit" not in df.columns:
                 df["profit"] = None
-            # 종목명: name이 비어있거나 ticker와 같으면 ticker 표시 (이름 조회 실패 fallback)
+            if "vwap_dev" not in df.columns:
+                df["vwap_dev"] = None
+            if "ha_pattern" not in df.columns:
+                df["ha_pattern"] = ""
+            # 종목명: name이 비어있거나 ticker와 같으면 ticker 표시
             df["종목명"] = df.apply(
                 lambda r: r["name"] if r["name"] and r["name"] != r["ticker"] else r["ticker"], axis=1
+            )
+            # VWAP 이탈률 표시
+            df["VWAP%"] = df["vwap_dev"].apply(
+                lambda v: f"{v:+.1f}%" if v is not None and not (isinstance(v, float) and v != v) else "-"
             )
             # 실현손익: SELL 행만 표시
             df["실현손익"] = df.apply(
@@ -956,8 +964,8 @@ elif page == "매매 이력":
                 else ("" if r["action"] == "BUY" else "-"),
                 axis=1,
             )
-            display_df = df[["ts", "action", "ticker", "종목명", "실현손익", "quantity", "price", "amount", "success", "reason"]].copy()
-            display_df.columns = ["일시", "구분", "종목코드", "종목명", "실현손익", "수량", "체결가", "금액", "성공", "판단 근거"]
+            display_df = df[["ts", "action", "ticker", "종목명", "VWAP%", "ha_pattern", "실현손익", "quantity", "price", "amount", "success", "reason"]].copy()
+            display_df.columns = ["일시", "구분", "종목코드", "종목명", "VWAP%", "HA패턴", "실현손익", "수량", "체결가", "금액", "성공", "판단 근거"]
             display_df["일시"] = display_df["일시"].dt.strftime("%Y-%m-%d %H:%M")
             display_df["체결가"] = display_df["체결가"].apply(lambda x: f"₩{x:,.0f}")
             display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")

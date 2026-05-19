@@ -102,7 +102,7 @@ _MAX_AGENT_RECORDS = 500     # 에이전트 실행 로그 최대 보존 건수 (
 
 
 def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool,
-              name: str = "", profit: int = 0):
+              name: str = "", profit: int = 0, vwap_dev: float | None = None, ha_pattern: str = ""):
     record: dict = {
         "ts": get_now_kst().isoformat(),
         "action": action,
@@ -114,6 +114,10 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
         "reason": reason,
         "success": success,
     }
+    if vwap_dev is not None:
+        record["vwap_dev"] = round(float(vwap_dev), 2)
+    if ha_pattern:
+        record["ha_pattern"] = ha_pattern
     if action == "SELL":
         record["profit"] = profit
     _append(_TRADE_BLOB, TRADE_LOG_FILE, record, max_records=_MAX_TRADE_RECORDS)
