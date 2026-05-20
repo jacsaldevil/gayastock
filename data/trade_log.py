@@ -43,6 +43,10 @@ def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) 
             lines = lines[-max_records:]
         blob.upload_from_string("\n".join(lines) + "\n",
                                 content_type="text/plain; charset=utf-8")
+        try:
+            blob.make_public()
+        except Exception:
+            pass  # Uniform Bucket-Level Access 사용 시 IAM으로 처리
         return True
     except Exception as e:
         logger.warning("GCS 쓰기 실패 (%s): %s", blob_name, e)

@@ -59,6 +59,8 @@ jobs:
           gsutil iam ch \
             "serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com:roles/storage.objectAdmin" \
             gs://$BUCKET 2>/dev/null || true
+          # logs/ 경로 공개 읽기 허용 (Claude 직접 접근용)
+          gsutil iam ch allUsers:objectViewer gs://$BUCKET 2>/dev/null || true
           echo "GCS_DATA_BUCKET=$BUCKET" >> $GITHUB_ENV
 
       - name: Configure Docker

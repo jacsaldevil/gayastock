@@ -144,6 +144,12 @@ if st.sidebar.button("저장", use_container_width=True):
     st.rerun()
 if not _GCS_DATA_BUCKET:
     st.sidebar.caption("⚠️ GCS 미설정 — 재배포 시 초기화됨")
+else:
+    st.sidebar.divider()
+    st.sidebar.markdown("**🔗 로그 직접 접근 URL**")
+    _base = f"https://storage.googleapis.com/{_GCS_DATA_BUCKET}"
+    st.sidebar.code(f"{_base}/logs/trades.jsonl", language=None)
+    st.sidebar.code(f"{_base}/logs/agent_runs.jsonl", language=None)
 
 @st.cache_data(ttl=30)
 def load_balance():
