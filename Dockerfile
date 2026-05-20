@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+RUN apt-get update && apt-get install -y --no-install-recommends nginx && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 COPY requirements.txt .
@@ -7,12 +9,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-RUN mkdir -p logs
+RUN mkdir -p logs && chmod +x dashboard/entrypoint.sh
 
 EXPOSE 8080
 
-CMD ["streamlit", "run", "dashboard/app.py", \
-     "--server.port=8080", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true", \
-     "--server.enableCORS=false"]
+CMD ["dashboard/entrypoint.sh"]
