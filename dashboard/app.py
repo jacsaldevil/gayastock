@@ -596,6 +596,53 @@ if page == "포트폴리오":
                 delta_color="normal" if profit_loss >= 0 else "inverse")
     col5.metric("보유 종목 수", f"{len(holdings)}개")
 
+    # ── 보유 종목 (메트릭 카드 바로 아래) ─────────────────────────────
+    if holdings:
+        st.divider()
+        st.subheader("📌 보유 종목")
+        _hold_rows = []
+        for _h in holdings:
+            _rate    = _h.get("profit_loss_rate", 0)
+            _avg_p   = _h.get("avg_price", 0)
+            _qty     = _h.get("quantity", 0)
+            _cur_p   = _h.get("current_price", 0)
+            _buy_amt = _avg_p * _qty
+            _pl_amt  = (_cur_p - _avg_p) * _qty
+
+            if _rate >= 3.5:    _remark = "🎯 TP 임박"
+            elif _rate >= 1.5:  _remark = "📈 수익권"
+            elif _rate >= 0:    _remark = "🟡 보합"
+            elif _rate >= -2.0: _remark = "📉 손실권"
+            else:               _remark = "⚠️ SL 위험"
+
+            _hold_rows.append({
+                "종목명":   _h.get("name") or _h.get("ticker", ""),
+                "코드":     _h.get("ticker", ""),
+                "수량":     _qty,
+                "매수가":   _avg_p,
+                "현재가":   _cur_p,
+                "수익률":   _rate,
+                "매수금액": _buy_amt,
+                "손익":     _pl_amt,
+                "비고":     _remark,
+            })
+
+        _hdf = pd.DataFrame(_hold_rows)
+        st.dataframe(
+            _hdf.style
+                .map(lambda v: "color: #2ecc71" if v >= 0 else "color: #e74c3c",
+                     subset=["수익률", "손익"])
+                .format({
+                    "매수가":   "{:,.0f}",
+                    "현재가":   "{:,.0f}",
+                    "수익률":   "{:+.2f}%",
+                    "매수금액": "₩{:,.0f}",
+                    "손익":     "₩{:+,.0f}",
+                }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     # ── 에이전트 상태 / 실행 버튼 ──────────────────────────────────────
     import time as _time
     import holidays as _hol
@@ -790,41 +837,8 @@ if page == "포트폴리오":
 
     st.divider()
 
-    if not holdings:
-        st.info("현재 보유 종목이 없습니다.")
-    else:
-        # 보유 종목 테이블
-        st.subheader("보유 종목")
-        df = pd.DataFrame(holdings)
-        df["평가금액"] = df["current_price"] * df["quantity"]
-        df["매입금액"] = df["avg_price"] * df["quantity"]
-        df = df.rename(columns={
-            "ticker": "종목코드",
-            "name": "종목명",
-            "quantity": "수량",
-            "avg_price": "평균단가",
-            "current_price": "현재가",
-            "profit_loss_rate": "수익률(%)",
-        })
-        display_cols = ["종목코드", "종목명", "수량", "평균단가", "현재가", "수익률(%)", "평가금액"]
-
-        def color_pl(val):
-            color = "color: #e74c3c" if val < 0 else "color: #2ecc71" if val > 0 else ""
-            return color
-
-        st.dataframe(
-            df[display_cols].style.map(color_pl, subset=["수익률(%)"])  .format({
-                "평균단가": "{:,.0f}",
-                "현재가": "{:,.0f}",
-                "수익률(%)": "{:+.2f}%",
-                "평가금액": "₩{:,.0f}",
-            }),
-            use_container_width=True,
-        )
-
-        st.divider()
-
-        # 포트폴리오 비중 파이차트
+    if holdings:
+        # 포트폴리오 비중 차트
         col_chart1, col_chart2 = st.columns(2)
         with col_chart1:
             st.subheader("종목별 비중")
