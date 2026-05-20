@@ -972,6 +972,33 @@ elif page == "매매 이력":
             display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
             st.dataframe(display_df, use_container_width=True, hide_index=True)
 
+            # ── 다운로드 ──────────────────────────────────────
+            st.divider()
+            _dl1, _dl2 = st.columns(2)
+
+            # CSV 다운로드
+            _csv_cols = ["ts", "action", "ticker", "name", "vwap_dev", "ha_pattern",
+                         "quantity", "price", "amount", "profit", "success", "reason"]
+            _export_df = df[[c for c in _csv_cols if c in df.columns]].copy()
+            _export_df["ts"] = _export_df["ts"].dt.strftime("%Y-%m-%d %H:%M:%S")
+            _dl1.download_button(
+                label="📥 CSV 다운로드",
+                data=_export_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"trades_{get_now_kst().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+            )
+
+            # JSONL 다운로드 (원본 — Claude 분석용)
+            import json as _json
+            _raw_lines = "\n".join(_json.dumps(r, ensure_ascii=False) for r in trades)
+            _dl2.download_button(
+                label="📥 JSONL 다운로드 (Claude 분석용)",
+                data=_raw_lines.encode("utf-8"),
+                file_name=f"trades_{get_now_kst().strftime('%Y%m%d')}.jsonl",
+                mime="application/jsonlines",
+            )
+            st.caption("💡 JSONL 파일을 `logs/trades.jsonl`에 저장하면 Claude Code가 바로 분석합니다.")
+
 # ════════════════════════════════════════════════════════
 elif page == "에이전트 로그":
     def _summary_preview(text: str, max_len: int = 55) -> str:
