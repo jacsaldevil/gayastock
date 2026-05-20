@@ -144,7 +144,7 @@ class KISBroker:
             "FID_BLNG_CLS_CODE": "0",
             "FID_TRGT_CLS_CODE": "111111111",
             "FID_TRGT_EXLS_CLS_CODE": "111111",  # 거래정지/관리/우선주/투자유의/ETF/스팩 제외
-            "FID_INPUT_PRICE_1": "",
+            "FID_INPUT_PRICE_1": "1000",
             "FID_INPUT_PRICE_2": "",
             "FID_VOL_CNT": "",
             "FID_INPUT_DATE_1": "",
@@ -159,6 +159,8 @@ class KISBroker:
             ticker = item.get("mksc_shrn_iscd", "")
             name = item.get("hts_kor_isnm", "")
             if not ticker or _is_fund(name):
+                continue
+            if _to_int(item.get("stck_prpr")) < 1000:
                 continue
             result.append({
                 "ticker": ticker,
