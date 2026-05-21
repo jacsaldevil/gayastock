@@ -23,30 +23,52 @@ _SETTINGS_BLOB = "settings.json"
 
 
 _settings_load_error: str = ""
+_settings_load_info: str = ""
 
 
 def _load_settings() -> dict:
-    global _settings_load_error
+    """GCS 공개 URL → 인증 읽기 → 로컬 순으로 설정 읽기"""
+    global _settings_load_error, _settings_load_info
     _settings_load_error = ""
+    _settings_load_info = ""
     if _GCS_DATA_BUCKET:
+        import urllib.request, urllib.error
+        bucket = _GCS_DATA_BUCKET.strip()
+        url = f"https://storage.googleapis.com/{bucket}/{_SETTINGS_BLOB}"
+        # 1단계: 공개 URL로 읽기 (인증 없이)
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                _settings_load_info = f"공개 URL 읽기 성공: {data}"
+                return data
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                _settings_load_info = f"settings.json 없음 (공개 URL 404) — 아직 저장 안 됨"
+            else:
+                _settings_load_info = f"공개 URL {e.code}: {e.reason} — 인증 읽기 시도"
+        except Exception as e:
+            _settings_load_info = f"공개 URL 실패: {type(e).__name__} — 인증 읽기 시도"
+
+        # 2단계: 인증된 GCS 클라이언트로 읽기
         try:
             from google.cloud import storage
-            blob = storage.Client().bucket(_GCS_DATA_BUCKET.strip()).blob(_SETTINGS_BLOB)
-            # blob.exists() 없이 바로 읽기 시도 — 없으면 NotFound 예외
-            try:
-                return json.loads(blob.download_as_text(encoding="utf-8"))
-            except Exception as read_err:
-                # 404 Not Found → 아직 저장 안 됨 (정상)
-                if "404" in str(read_err) or "NotFound" in type(read_err).__name__:
-                    return {}
-                raise  # 그 외 오류는 상위에서 처리
-        except Exception as e:
-            _settings_load_error = str(e)
-            logger.warning("settings GCS 읽기 실패 (%s): %s", type(e).__name__, e)
+            blob = storage.Client().bucket(bucket).blob(_SETTINGS_BLOB)
+            data = json.loads(blob.download_as_text(encoding="utf-8"))
+            _settings_load_info += f" | 인증 읽기 성공: {data}"
+            return data
+        except Exception as e2:
+            err = str(e2)
+            if "404" in err or "NotFound" in type(e2).__name__:
+                _settings_load_info += " | 인증 읽기: 404 없음"
+                return {}
+            _settings_load_error = f"[{type(e2).__name__}] {err[:120]}"
+            logger.warning("settings GCS 인증 읽기 실패: %s", e2)
             return {}
     try:
         with open(".dashboard_settings.json", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            _settings_load_info = f"로컬 파일 읽기 성공: {data}"
+            return data
     except Exception:
         return {}
 
@@ -60,6 +82,10 @@ def _save_settings(data: dict) -> str:
             from google.cloud import storage
             blob = storage.Client().bucket(_GCS_DATA_BUCKET.strip()).blob(_SETTINGS_BLOB)
             blob.upload_from_string(json.dumps(existing), content_type="application/json")
+            try:
+                blob.make_public()  # 공개 URL 읽기 가능하도록
+            except Exception:
+                pass  # Uniform Bucket-Level Access 환경에서는 IAM으로 처리됨
             return "gcs"
         except Exception as e:
             logger.warning("settings GCS 저장 실패: %s", e)
@@ -141,10 +167,17 @@ st.sidebar.markdown("**💰 투자금액 설정**")
 _CAPITAL_KEY = "capital_input_widget"
 _cur_capital = _get_initial_capital()
 if _settings_load_error:
-    st.sidebar.error(f"⚠️ GCS 읽기 오류: {_settings_load_error[:120]}")
-elif _GCS_DATA_BUCKET and "initial_capital" not in st.session_state:
-    # GCS에서 성공적으로 읽었으나 값이 없는 경우 — 아직 저장 안 된 것 (정상)
-    pass
+    st.sidebar.error(f"⚠️ GCS 읽기 오류: {_settings_load_error}")
+
+with st.sidebar.expander("🔍 설정 진단", expanded=bool(_settings_load_error)):
+    st.caption(f"버킷: `{_GCS_DATA_BUCKET or '미설정'}`")
+    st.caption(f"파일: `{_SETTINGS_BLOB}`")
+    st.caption(f"환경변수 INITIAL_CAPITAL: `{_INITIAL_CAPITAL_ENV:,}`")
+    st.caption(f"현재 투자금액: `{_cur_capital:,}`")
+    if _settings_load_info:
+        st.caption(f"읽기 결과: {_settings_load_info}")
+    if _settings_load_error:
+        st.caption(f"오류: {_settings_load_error}")
 
 _new_capital = st.sidebar.number_input(
     "투자 원금 (원)", min_value=0, step=10000,
