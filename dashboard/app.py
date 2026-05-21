@@ -32,12 +32,17 @@ def _load_settings() -> dict:
         try:
             from google.cloud import storage
             blob = storage.Client().bucket(_GCS_DATA_BUCKET.strip()).blob(_SETTINGS_BLOB)
-            if blob.exists():
-                return json.loads(blob.download_as_text())
-            return {}
+            # blob.exists() 없이 바로 읽기 시도 — 없으면 NotFound 예외
+            try:
+                return json.loads(blob.download_as_text(encoding="utf-8"))
+            except Exception as read_err:
+                # 404 Not Found → 아직 저장 안 됨 (정상)
+                if "404" in str(read_err) or "NotFound" in type(read_err).__name__:
+                    return {}
+                raise  # 그 외 오류는 상위에서 처리
         except Exception as e:
             _settings_load_error = str(e)
-            logger.warning("settings GCS 읽기 실패: %s", e)
+            logger.warning("settings GCS 읽기 실패 (%s): %s", type(e).__name__, e)
             return {}
     try:
         with open(".dashboard_settings.json", encoding="utf-8") as f:
@@ -136,7 +141,10 @@ st.sidebar.markdown("**💰 투자금액 설정**")
 _CAPITAL_KEY = "capital_input_widget"
 _cur_capital = _get_initial_capital()
 if _settings_load_error:
-    st.sidebar.caption(f"⚠️ 설정 로드 오류: {_settings_load_error[:80]}")
+    st.sidebar.error(f"⚠️ GCS 읽기 오류: {_settings_load_error[:120]}")
+elif _GCS_DATA_BUCKET and "initial_capital" not in st.session_state:
+    # GCS에서 성공적으로 읽었으나 값이 없는 경우 — 아직 저장 안 된 것 (정상)
+    pass
 
 _new_capital = st.sidebar.number_input(
     "투자 원금 (원)", min_value=0, step=10000,
