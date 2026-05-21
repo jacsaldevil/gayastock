@@ -25,7 +25,6 @@ _SETTINGS_BLOB = "settings.json"
 _settings_load_error: str = ""
 
 
-@st.cache_data(ttl=300)
 def _load_settings() -> dict:
     global _settings_load_error
     _settings_load_error = ""
@@ -56,26 +55,27 @@ def _save_settings(data: dict) -> str:
             from google.cloud import storage
             blob = storage.Client().bucket(_GCS_DATA_BUCKET.strip()).blob(_SETTINGS_BLOB)
             blob.upload_from_string(json.dumps(existing), content_type="application/json")
-            _load_settings.clear()
             return "gcs"
         except Exception as e:
             logger.warning("settings GCS 저장 실패: %s", e)
     try:
         with open(".dashboard_settings.json", "w", encoding="utf-8") as f:
             json.dump(existing, f)
-        _load_settings.clear()
         return "local"
     except Exception:
         return "error"
 
 
 def _get_initial_capital() -> int:
-    """GCS 설정 → 환경변수 순으로 투자금액 반환"""
+    """세션 상태 → GCS 설정 → 환경변수 순으로 투자금액 반환"""
+    # 저장 직후 세션 내에서 즉시 반영되도록 session_state 우선 사용
+    if "initial_capital" in st.session_state:
+        return int(st.session_state["initial_capital"])
     settings = _load_settings()
     val = settings.get("initial_capital", 0)
-    if val > 0:
-        return val
-    return _INITIAL_CAPITAL_ENV
+    result = val if val > 0 else _INITIAL_CAPITAL_ENV
+    st.session_state["initial_capital"] = result
+    return result
 
 
 def _get_sim_datetime(live: bool):
@@ -133,11 +133,7 @@ refresh = st.sidebar.button("🔄 새로고침")
 st.sidebar.divider()
 st.sidebar.markdown("**💰 투자금액 설정**")
 
-# 저장 직후 재렌더 시 위젯 세션 상태를 초기화해 업데이트된 값이 반영되도록 함
 _CAPITAL_KEY = "capital_input_widget"
-if st.session_state.pop("_capital_just_saved", False):
-    st.session_state.pop(_CAPITAL_KEY, None)
-
 _cur_capital = _get_initial_capital()
 if _settings_load_error:
     st.sidebar.caption(f"⚠️ 설정 로드 오류: {_settings_load_error[:80]}")
@@ -150,10 +146,13 @@ _new_capital = st.sidebar.number_input(
     key=_CAPITAL_KEY,
 )
 if st.sidebar.button("저장", use_container_width=True):
-    _where = _save_settings({"initial_capital": int(_new_capital)})
+    _save_val = int(_new_capital)
+    _where = _save_settings({"initial_capital": _save_val})
     st.cache_data.clear()
     if _where in ("gcs", "local"):
-        st.session_state["_capital_just_saved"] = True
+        # 세션 상태 즉시 업데이트 — GCS 읽기 성공 여부와 무관하게 이번 세션에 반영
+        st.session_state["initial_capital"] = _save_val
+        st.session_state.pop(_CAPITAL_KEY, None)  # 위젯도 새 값으로 초기화
     if _where == "gcs":
         st.sidebar.success("✅ GCS 저장 완료 (영구 보존)")
     elif _where == "local":
