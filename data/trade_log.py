@@ -2,6 +2,8 @@
 import json
 import logging
 import os
+import threading
+import time
 from datetime import datetime
 from data.utils import get_now_kst
 
@@ -19,6 +21,9 @@ _AGENT_BLOB = "logs/agent_runs.jsonl"
 
 # ── GCS 헬퍼 ────────────────────────────
 
+_gcs_lock = threading.Lock()  # 프로세스 내 동시 쓰기 직렬화
+
+
 def _gcs_read_lines(blob_name: str) -> list[str]:
     try:
         from google.cloud import storage
@@ -32,22 +37,48 @@ def _gcs_read_lines(blob_name: str) -> list[str]:
 
 
 def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) -> bool:
+    """generation match + 재시도로 동시 쓰기 충돌 방지."""
     try:
         from google.cloud import storage
-        bucket = storage.Client().bucket(_GCS_BUCKET)
-        blob = bucket.blob(blob_name)
-        existing = blob.download_as_text(encoding="utf-8") if blob.exists() else ""
-        lines = [l for l in existing.splitlines() if l.strip()]
-        lines.append(line)
-        if max_records:
-            lines = lines[-max_records:]
-        blob.upload_from_string("\n".join(lines) + "\n",
-                                content_type="text/plain; charset=utf-8")
-        try:
-            blob.make_public()
-        except Exception:
-            pass  # Uniform Bucket-Level Access 사용 시 IAM으로 처리
-        return True
+        from google.api_core.exceptions import PreconditionFailed
+
+        with _gcs_lock:
+            for attempt in range(5):
+                try:
+                    bucket = storage.Client().bucket(_GCS_BUCKET)
+                    blob = bucket.blob(blob_name)
+                    if blob.exists():
+                        blob.reload()
+                        generation = blob.generation
+                        existing = blob.download_as_text(encoding="utf-8")
+                    else:
+                        generation = 0
+                        existing = ""
+
+                    lines = [l for l in existing.splitlines() if l.strip()]
+                    lines.append(line)
+                    if max_records:
+                        lines = lines[-max_records:]
+
+                    blob.upload_from_string(
+                        "\n".join(lines) + "\n",
+                        content_type="text/plain; charset=utf-8",
+                        if_generation_match=generation,
+                    )
+                    try:
+                        blob.make_public()
+                    except Exception:
+                        pass  # Uniform Bucket-Level Access 사용 시 IAM으로 처리
+                    return True
+
+                except PreconditionFailed:
+                    # 다른 프로세스가 먼저 썼으면 재시도
+                    if attempt < 4:
+                        time.sleep(0.2 * (2 ** attempt))  # 0.2 → 0.4 → 0.8 → 1.6초
+
+            logger.warning("GCS 동시 쓰기 충돌 — 재시도 5회 초과: %s", blob_name)
+            return False
+
     except Exception as e:
         logger.warning("GCS 쓰기 실패 (%s): %s", blob_name, e)
         return False
