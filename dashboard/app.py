@@ -19,16 +19,24 @@ _GCS_DATA_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
 _SETTINGS_BLOB = "settings.json"
 
 
+_settings_load_error: str = ""
+
+
+@st.cache_data(ttl=300)
 def _load_settings() -> dict:
+    global _settings_load_error
+    _settings_load_error = ""
     if _GCS_DATA_BUCKET:
         try:
             from google.cloud import storage
-            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET.strip()).blob(_SETTINGS_BLOB)
             if blob.exists():
                 return json.loads(blob.download_as_text())
-        except Exception:
-            pass
-    # 로챈 fallback
+            return {}
+        except Exception as e:
+            _settings_load_error = str(e)
+            logger.warning("settings GCS 읽기 실패: %s", e)
+            return {}
     try:
         with open(".dashboard_settings.json", encoding="utf-8") as f:
             return json.load(f)
@@ -36,20 +44,26 @@ def _load_settings() -> dict:
         return {}
 
 
-def _save_settings(data: dict):
+def _save_settings(data: dict) -> str:
+    """저장 위치 반환: 'gcs' | 'local' | 'error'"""
+    existing = _load_settings()
+    existing.update(data)
     if _GCS_DATA_BUCKET:
         try:
             from google.cloud import storage
-            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
-            blob.upload_from_string(json.dumps(data), content_type="application/json")
-            return
-        except Exception:
-            pass
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET.strip()).blob(_SETTINGS_BLOB)
+            blob.upload_from_string(json.dumps(existing), content_type="application/json")
+            _load_settings.clear()
+            return "gcs"
+        except Exception as e:
+            logger.warning("settings GCS 저장 실패: %s", e)
     try:
         with open(".dashboard_settings.json", "w", encoding="utf-8") as f:
-            json.dump(data, f)
+            json.dump(existing, f)
+        _load_settings.clear()
+        return "local"
     except Exception:
-        pass
+        return "error"
 
 
 def _get_initial_capital() -> int:
@@ -111,16 +125,34 @@ refresh = st.sidebar.button("🔄 새로고침")
 
 st.sidebar.divider()
 st.sidebar.markdown("**💰 투자금액 설정**")
+
+# 저장 직후 재렌더 시 위젯 세션 상태를 초기화해 업데이트된 값이 반영되도록 함
+_CAPITAL_KEY = "capital_input_widget"
+if st.session_state.pop("_capital_just_saved", False):
+    st.session_state.pop(_CAPITAL_KEY, None)
+
 _cur_capital = _get_initial_capital()
+if _settings_load_error:
+    st.sidebar.caption(f"⚠️ 설정 로드 오류: {_settings_load_error[:80]}")
+
 _new_capital = st.sidebar.number_input(
     "투자 원금 (원)", min_value=0, step=10000,
     value=_cur_capital, format="%d",
     help="0이면 현재 예수금 기준으로 표시됩니다.",
     label_visibility="collapsed",
+    key=_CAPITAL_KEY,
 )
 if st.sidebar.button("저장", use_container_width=True):
-    _save_settings({"initial_capital": int(_new_capital)})
+    _where = _save_settings({"initial_capital": int(_new_capital)})
     st.cache_data.clear()
+    if _where in ("gcs", "local"):
+        st.session_state["_capital_just_saved"] = True
+    if _where == "gcs":
+        st.sidebar.success("✅ GCS 저장 완료 (영구 보존)")
+    elif _where == "local":
+        st.sidebar.warning("⚠️ 로컬 저장 (재배포 시 초기화)")
+    else:
+        st.sidebar.error("❌ 저장 실패")
     st.rerun()
 
 @st.cache_data(ttl=30)
