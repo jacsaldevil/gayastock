@@ -316,7 +316,7 @@ class KISBroker:
             })
         return result
 
-    def get_daily_candles(self, ticker: str, days: int = 60) -> list[dict]:
+    def get_daily_candles(self, ticker: str, days: int = 20) -> list[dict]:
         """일봉 조회 (TR: FHKST03010100) — 최근 N거래일 OHLCV + 등락률"""
         from datetime import date
         end = get_now_kst().strftime("%Y%m%d")

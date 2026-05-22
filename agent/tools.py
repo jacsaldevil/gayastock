@@ -134,7 +134,7 @@ GEMINI_TOOLS = Tool(
                 "type": "object",
                 "properties": {
                     "ticker": {"type": "string", "description": "6자리 종목코드"},
-                    "days":   {"type": "integer", "description": "조회할 거래일 수 (기본 60, 최대 120)"},
+                    "days":   {"type": "integer", "description": "조회할 거래일 수 (기본 20, 최대 60)"},
                 },
                 "required": ["ticker"],
             },
@@ -184,7 +184,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
         elif tool_name == "get_daily_price_chart":
             _validate_ticker(tool_input["ticker"])
-            days = min(int(tool_input.get("days", 60)), 120)
+            days = min(int(tool_input.get("days", 20)), 60)
             result = broker.get_daily_candles(tool_input["ticker"], days)
 
         elif tool_name == "get_portfolio":
