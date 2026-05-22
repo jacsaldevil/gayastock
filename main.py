@@ -52,7 +52,7 @@ def is_trading_day() -> bool:
     today = get_now_kst().date()
     if today.weekday() >= 5:
         return False
-    kr_holidays = holidays.Korea(years=today.year)
+    kr_holidays = holidays.SouthKorea(years=today.year)
     return today not in kr_holidays
 
 
