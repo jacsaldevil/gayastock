@@ -25,10 +25,11 @@ def _gcs_read_token() -> dict | None:
     try:
         from google.cloud import storage
         blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
-        if blob.exists():
-            return json.loads(blob.download_as_text())
+        return json.loads(blob.download_as_text())
     except Exception as e:
-        logger.debug("GCS 토큰 읽기 실패: %s", e)
+        if "404" in str(e) or "NotFound" in type(e).__name__:
+            return None  # 아직 캐시 없음 — 정상
+        logger.warning("GCS 토큰 읽기 실패 (%s): %s", type(e).__name__, e)
     return None
 
 
@@ -40,7 +41,7 @@ def _gcs_write_token(data: dict):
         blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
         blob.upload_from_string(json.dumps(data), content_type="application/json")
     except Exception as e:
-        logger.debug("GCS 토큰 저장 실패: %s", e)
+        logger.warning("GCS 토큰 저장 실패 (%s): %s", type(e).__name__, e)
 
 
 class KISBroker:
@@ -78,6 +79,7 @@ class KISBroker:
             if get_now_kst() < expires_at:
                 self._access_token = data["access_token"]
                 self._token_expires_at = expires_at
+                logger.info("KIS 토큰 캐시 재사용 (만료: %s)", expires_at.strftime("%H:%M"))
         except Exception:
             pass
 
