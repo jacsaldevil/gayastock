@@ -16,19 +16,23 @@ logger = logging.getLogger(__name__)
 TOKEN_CACHE_FILE = ".kis_token_cache.json"
 TOKEN_CACHE_BLOB = "kis_token_cache.json"
 # GCS_TOKEN_BUCKET 우선, 없으면 GCS_DATA_BUCKET 공유 (Cloud Run 환경)
-_GCS_BUCKET = os.environ.get("GCS_TOKEN_BUCKET") or os.environ.get("GCS_DATA_BUCKET", "")
+_GCS_BUCKET = (os.environ.get("GCS_TOKEN_BUCKET") or os.environ.get("GCS_DATA_BUCKET", "")).strip()
 
 
 def _gcs_read_token() -> dict | None:
     if not _GCS_BUCKET:
+        logger.warning("GCS 토큰 캐시: GCS_DATA_BUCKET 미설정 — 매 실행마다 토큰 재발급됨")
         return None
     try:
         from google.cloud import storage
         blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
-        return json.loads(blob.download_as_text())
+        text = blob.download_as_text()
+        logger.info("GCS 토큰 캐시 읽기 성공 (bucket=%s)", _GCS_BUCKET)
+        return json.loads(text)
     except Exception as e:
         if "404" in str(e) or "NotFound" in type(e).__name__:
-            return None  # 아직 캐시 없음 — 정상
+            logger.info("GCS 토큰 캐시 없음 (첫 실행) — 신규 토큰 발급")
+            return None
         logger.warning("GCS 토큰 읽기 실패 (%s): %s", type(e).__name__, e)
     return None
 
@@ -76,12 +80,20 @@ class KISBroker:
             return
         try:
             expires_at = datetime.fromisoformat(data["expires_at"])
-            if get_now_kst() < expires_at:
+            # fromisoformat이 naive datetime 반환하면 KST로 보정
+            from data.utils import KST
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=KST)
+            now = get_now_kst()
+            if now < expires_at:
                 self._access_token = data["access_token"]
                 self._token_expires_at = expires_at
-                logger.info("KIS 토큰 캐시 재사용 (만료: %s)", expires_at.strftime("%H:%M"))
-        except Exception:
-            pass
+                remaining = int((expires_at - now).total_seconds() / 60)
+                logger.info("KIS 토큰 캐시 재사용 (만료: %s, 잔여 %d분)", expires_at.strftime("%H:%M"), remaining)
+            else:
+                logger.info("KIS 토큰 캐시 만료됨 (만료: %s) — 신규 발급", expires_at.strftime("%H:%M"))
+        except Exception as e:
+            logger.warning("KIS 토큰 캐시 파싱 실패 (%s): %s — 신규 발급", type(e).__name__, e)
 
     def _save_token_cache(self, token: str, expires_at: datetime):
         data = {"access_token": token, "expires_at": expires_at.isoformat()}
@@ -110,7 +122,14 @@ class KISBroker:
         if "access_token" not in data:
             raise ValueError(f"KIS 토큰 발급 실패: {data.get('msg1', data.get('msg', str(data)))}")
         self._access_token = data["access_token"]
-        self._token_expires_at = get_now_kst() + timedelta(hours=23)
+        # KIS API가 실제 만료 시각을 반환하면 사용, 없으면 23시간 후
+        raw_exp = data.get("access_token_token_expired", "")
+        try:
+            from data.utils import KST
+            self._token_expires_at = datetime.strptime(raw_exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=KST)
+        except Exception:
+            self._token_expires_at = get_now_kst() + timedelta(hours=23)
+        logger.info("KIS 신규 토큰 발급 완료 (만료: %s)", self._token_expires_at.strftime("%Y-%m-%d %H:%M"))
         self._save_token_cache(self._access_token, self._token_expires_at)
         return self._access_token
 
