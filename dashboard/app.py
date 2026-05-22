@@ -118,7 +118,7 @@ def _get_sim_datetime(live: bool):
     first_slot = _SCHEDULE_SLOTS[0][0]
     now_kst = get_now_kst()
     check = now_kst.date()
-    kr_hol = _hol.Korea(years=check.year)
+    kr_hol = _hol.SouthKorea(years=check.year)
     for _ in range(7):
         if check.weekday() < 5 and check not in kr_hol:
             break
@@ -398,20 +398,20 @@ def _load_session_progress() -> dict:
         try:
             from google.cloud import storage
             blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_PROGRESS_BLOB)
-            if blob.exists():
-                data = json.loads(blob.download_as_text())
-                if data.get("status") in ("running", "summarizing", "llm_running"):
-                    try:
-                        started = datetime.fromisoformat(data["started_at"])
-                        if started.tzinfo is None:
-                            started = started.replace(tzinfo=KST)
-                        if (get_now_kst() - started).total_seconds() > 1200:
-                            return {}
-                    except Exception:
+            data = json.loads(blob.download_as_text())
+            if data.get("status") in ("running", "summarizing", "llm_running"):
+                try:
+                    started = datetime.fromisoformat(data["started_at"])
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=KST)
+                    if (get_now_kst() - started).total_seconds() > 1200:
                         return {}
-                return data
-        except Exception:
-            pass
+                except Exception:
+                    return {}
+            return data
+        except Exception as e:
+            if "404" not in str(e) and "NotFound" not in type(e).__name__:
+                logger.warning("session_progress GCS 읽기 실패: %s", e)
         return {}
     try:
         with open(_PROGRESS_LOCAL, encoding="utf-8") as f:
@@ -784,7 +784,7 @@ if page == "포트폴리오":
     _now_kst = get_now_kst()
     _live = (
         _now_kst.weekday() < 5 and
-        _now_kst.date() not in _hol.Korea(years=[_now_kst.year]) and
+        _now_kst.date() not in _hol.SouthKorea(years=[_now_kst.year]) and
         _dtime(9, 0) <= _now_kst.time() <= _dtime(15, 30)
     )
     with st.expander("▶ 에이전트 실행", expanded=False):

@@ -28,11 +28,11 @@ def _gcs_read_lines(blob_name: str) -> list[str]:
     try:
         from google.cloud import storage
         blob = storage.Client().bucket(_GCS_BUCKET).blob(blob_name)
-        if not blob.exists():
-            return []
         return blob.download_as_text(encoding="utf-8").splitlines()
     except Exception as e:
-        logger.debug("GCS 읽기 실패 (%s): %s", blob_name, e)
+        if "404" in str(e) or "NotFound" in type(e).__name__:
+            return []
+        logger.warning("GCS 읽기 실패 (%s): %s", blob_name, e)
         return []
 
 
@@ -47,13 +47,16 @@ def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) 
                 try:
                     bucket = storage.Client().bucket(_GCS_BUCKET)
                     blob = bucket.blob(blob_name)
-                    if blob.exists():
+                    try:
                         blob.reload()
                         generation = blob.generation
                         existing = blob.download_as_text(encoding="utf-8")
-                    else:
-                        generation = 0
-                        existing = ""
+                    except Exception as _e:
+                        if "404" in str(_e) or "NotFound" in type(_e).__name__:
+                            generation = 0
+                            existing = ""
+                        else:
+                            raise
 
                     lines = [l for l in existing.splitlines() if l.strip()]
                     lines.append(line)
