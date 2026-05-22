@@ -104,7 +104,8 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
 
 
 def run_trading():
-    if not is_trading_day() and os.environ.get("FORCE_RUN") != "true":
+    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    if not dry_run and not is_trading_day() and os.environ.get("FORCE_RUN") != "true":
         logger.info("오늘은 휴장일(공휴일/주말)입니다. 건너뜁니다.")
         return
 
@@ -115,8 +116,6 @@ def run_trading():
         TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
         INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
     )
-
-    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     agent = TradingAgent()
     broker = _broker()
 
