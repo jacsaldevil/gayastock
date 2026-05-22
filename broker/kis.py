@@ -316,6 +316,91 @@ class KISBroker:
             })
         return result
 
+    def get_daily_candles(self, ticker: str, days: int = 60) -> list[dict]:
+        """일봉 조회 (TR: FHKST03010100) — 최근 N거래일 OHLCV + 등락률"""
+        from datetime import date
+        end = get_now_kst().strftime("%Y%m%d")
+        # 충분한 날짜 범위 확보 (영업일 기준 days개를 확보하려면 달력일 기준으로 더 넓게)
+        start = (get_now_kst() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": ticker,
+            "FID_INPUT_DATE_1": start,
+            "FID_INPUT_DATE_2": end,
+            "FID_PERIOD_DIV_CODE": "D",
+            "FID_ORG_ADJ_PRC": "0",
+        }
+        res = requests.get(url, headers=self._headers("FHKST03010100"), params=params, timeout=10)
+        res.raise_for_status()
+        output = res.json().get("output2", [])
+        self._smart_sleep()
+
+        result = []
+        for r in reversed(output):  # API는 최신순, 오래된 순으로 뒤집기
+            close = _to_int(r.get("stck_clpr"))
+            if close == 0:
+                continue
+            result.append({
+                "date": r.get("stck_bsop_date", ""),
+                "open": _to_int(r.get("stck_oprc")),
+                "high": _to_int(r.get("stck_hgpr")),
+                "low": _to_int(r.get("stck_lwpr")),
+                "close": close,
+                "volume": _to_int(r.get("acml_vol")),
+                "change_rate": _to_float(r.get("prdy_ctrt")),
+            })
+        return result[-days:]  # 최근 days개만 반환
+
+    def get_financial_summary(self, ticker: str) -> dict:
+        """재무 요약 — 손익계산서 + 재무비율 통합 반환 (LLM용 단일 호출)"""
+        try:
+            income = self.get_income_statement(ticker, annual=True)
+        except Exception as e:
+            logger.warning("손익계산서 조회 실패 (%s): %s", ticker, e)
+            income = []
+        try:
+            ratios = self.get_financial_ratio(ticker, annual=True)
+        except Exception as e:
+            logger.warning("재무비율 조회 실패 (%s): %s", ticker, e)
+            ratios = []
+        try:
+            balance = self.get_balance_sheet(ticker, annual=True)
+        except Exception as e:
+            logger.warning("대차대조표 조회 실패 (%s): %s", ticker, e)
+            balance = []
+
+        # 최근 연도 기준으로 병합 (period 키 기준)
+        merged: dict[str, dict] = {}
+        for row in income:
+            p = row["period"]
+            merged.setdefault(p, {})["period"] = p
+            merged[p].update({
+                "revenue": row["revenue"],
+                "operating_profit": row["operating_profit"],
+                "net_profit": row["net_profit"],
+                "operating_margin_pct": row["operating_margin_pct"],
+                "eps": row["eps"],
+            })
+        for row in ratios:
+            p = row["period"]
+            merged.setdefault(p, {})["period"] = p
+            merged[p].update({
+                "roe_pct": row["roe_pct"],
+                "per": row["per"],
+                "pbr": row["pbr"],
+            })
+        for row in balance:
+            p = row["period"]
+            merged.setdefault(p, {})["period"] = p
+            merged[p].update({
+                "debt_ratio_pct": row["debt_ratio_pct"],
+                "total_assets": row["total_assets"],
+            })
+
+        periods = sorted(merged.keys(), reverse=True)[:4]  # 최근 4개 연도
+        return {"ticker": ticker, "annual": [merged[p] for p in periods]}
+
     # ── 잔고 조회 ─────────────────────────────────────────
 
     def get_balance(self) -> dict:

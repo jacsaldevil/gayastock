@@ -106,6 +106,40 @@ GEMINI_TOOLS = Tool(
             },
         ),
         FunctionDeclaration(
+            name="get_financial_summary",
+            description=(
+                "종목의 연간 재무 요약을 조회합니다 (최근 4개 연도). "
+                "반환값: revenue(매출), operating_profit(영업이익), net_profit(순이익), "
+                "operating_margin_pct(영업이익률%), roe_pct(ROE%), debt_ratio_pct(부채비율%), "
+                "per, pbr, eps. "
+                "매수 전 재무 건전성과 성장성을 파악하고 싶을 때 호출하세요."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "6자리 종목코드"},
+                },
+                "required": ["ticker"],
+            },
+        ),
+        FunctionDeclaration(
+            name="get_daily_price_chart",
+            description=(
+                "일봉 차트 데이터를 조회합니다. "
+                "반환값: 날짜별 open/high/low/close/volume/change_rate 목록. "
+                "중장기 추세, 지지/저항 구간, 최근 급등 여부 파악에 사용하세요. "
+                "days 파라미터로 조회 기간을 조정할 수 있습니다 (기본 60거래일)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "6자리 종목코드"},
+                    "days":   {"type": "integer", "description": "조회할 거래일 수 (기본 60, 최대 120)"},
+                },
+                "required": ["ticker"],
+            },
+        ),
+        FunctionDeclaration(
             name="sell_stock",
             description="보유 종목을 시장가로 매도합니다.",
             parameters={
@@ -143,6 +177,15 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
         elif tool_name == "get_heikin_ashi_candles":
             _validate_ticker(tool_input["ticker"])
             result = broker.get_minute_candles(tool_input["ticker"])
+
+        elif tool_name == "get_financial_summary":
+            _validate_ticker(tool_input["ticker"])
+            result = broker.get_financial_summary(tool_input["ticker"])
+
+        elif tool_name == "get_daily_price_chart":
+            _validate_ticker(tool_input["ticker"])
+            days = min(int(tool_input.get("days", 60)), 120)
+            result = broker.get_daily_candles(tool_input["ticker"], days)
 
         elif tool_name == "get_portfolio":
             if _is_dry_run():
