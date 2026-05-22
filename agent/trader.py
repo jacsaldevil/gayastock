@@ -21,7 +21,7 @@ SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").format(
     STOP_LOSS_PCT=STOP_LOSS_PCT,
 )
 
-MAX_TOOL_ROUNDS = 30
+MAX_TOOL_ROUNDS = 50
 
 _SCHEDULE_SLOTS = [
     (dtime(9, 20),  "【1회차 — 진입】장 시작 20분 경과. Google 검색 후 Top10 스캔, VWAP +1~+2% 종목 적극 매수."),
