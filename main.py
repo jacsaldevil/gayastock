@@ -104,7 +104,7 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
 
 
 def run_trading():
-    if not is_trading_day():
+    if not is_trading_day() and os.environ.get("FORCE_RUN") != "true":
         logger.info("오늘은 휴장일(공휴일/주말)입니다. 건너뜁니다.")
         return
 
@@ -238,11 +238,16 @@ def main():
     parser = argparse.ArgumentParser(description="gayastock 트레이딩 에이전트")
     parser.add_argument("--once", action="store_true", help="1회 즉시 실행 후 종료")
     parser.add_argument("--dry-run", action="store_true", help="시뮬레이션 모드 (실제 주문 없음)")
+    parser.add_argument("--force", action="store_true", help="휴장일 체크 무시 (테스트용)")
+    parser.add_argument("--tickers", nargs="+", help="분석할 종목 코드 지정 (예: 005930 000660)")
     args = parser.parse_args()
 
     if args.dry_run:
         os.environ["DRY_RUN"] = "true"
         logger.info("DRY-RUN 모드 활성화 — 실제 주문이 실행되지 않습니다.")
+
+    if args.force:
+        os.environ["FORCE_RUN"] = "true"
 
     if args.once:
         run_trading()

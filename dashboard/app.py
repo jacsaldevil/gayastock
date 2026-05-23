@@ -411,8 +411,13 @@ def _load_session_progress() -> dict:
             return data
         except Exception as e:
             if "404" not in str(e) and "NotFound" not in type(e).__name__:
-                logger.warning("session_progress GCS 읽기 실패: %s", e)
-        return {}
+                logger.warning("session_progress GCS 읽기 실패 — 로컬 폴백: %s", e)
+    try:
+        with open(_PROGRESS_LOCAL, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        pass
+    return {}
     try:
         with open(_PROGRESS_LOCAL, encoding="utf-8") as f:
             return json.load(f)
@@ -434,8 +439,8 @@ def _write_session_progress(data: dict):
             storage.Client().bucket(_GCS_DATA_BUCKET).blob(_PROGRESS_BLOB).upload_from_string(
                 json.dumps(data, ensure_ascii=False), content_type="application/json"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("session_progress GCS 쓰기 실패: %s", e)
 
 
 def _run_agent_bg(sim_id: str, live: bool):
