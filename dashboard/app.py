@@ -615,6 +615,18 @@ def _launch_agent(live: bool) -> str | None:
         "mode": mode_str, "status": "running", "finished_at": None,
     })
     _sim_save_index(idx)
+    # 스레드 시작 전에 progress를 먼저 기록 — st.rerun() 후 첫 렌더링에서
+    # _prog_active=True 가 되어 자동 새로고침 루프가 즉시 시작됨
+    _write_session_progress({
+        "session_id": sim_id,
+        "source": "dashboard",
+        "mode": "live" if live else "dry_run",
+        "status": "running",
+        "started_at": _now.isoformat(),
+        "total_loops": 1,
+        "current_loop": 0,
+        "loops": [],
+    })
     threading.Thread(target=_run_agent_bg, args=(sim_id, live), daemon=True).start()
     return sim_id
 
