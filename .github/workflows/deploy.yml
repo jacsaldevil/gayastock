@@ -98,7 +98,7 @@ jobs:
       - name: Update Cloud Run Job (Agent)
         run: |
           IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
-          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=1,INNER_LOOP_SLEEP_SEC=0"
+          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=3,INNER_LOOP_SLEEP_SEC=30"
           SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 600 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
           if gcloud run jobs describe $AGENT_JOB --region $REGION --quiet 2>/dev/null; then

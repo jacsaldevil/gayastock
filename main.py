@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import time
+from datetime import timedelta
 from data.utils import get_now_kst
 
 logging.Formatter.converter = lambda *args: get_now_kst().timetuple()
@@ -104,7 +105,8 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
 
 
 def run_trading():
-    if not is_trading_day() and os.environ.get("FORCE_RUN") != "true":
+    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    if not dry_run and not is_trading_day() and os.environ.get("FORCE_RUN") != "true":
         logger.info("오늘은 휴장일(공휴일/주말)입니다. 건너뜁니다.")
         return
 
@@ -115,8 +117,6 @@ def run_trading():
         TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
         INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
     )
-
-    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     agent = TradingAgent()
     broker = _broker()
 
@@ -132,16 +132,28 @@ def run_trading():
     if dry_run:
         from agent.trader import _SCHEDULE_SLOTS
         from datetime import datetime as _dt, time as _dtime
+        import holidays as _hol
         now_kst = get_now_kst()
         market_open = _dtime(9, 0)
         market_close = _dtime(15, 30)
-        in_market = market_open <= now_kst.time() <= market_close
+        kr_hol = _hol.SouthKorea(years=now_kst.year)
+        in_market = (
+            now_kst.weekday() < 5
+            and now_kst.date() not in kr_hol
+            and market_open <= now_kst.time() <= market_close
+        )
         if not in_market:
+            # 장외/휴장일 → 가장 최근 거래일 09:20으로 시뮬
             first_slot = _SCHEDULE_SLOTS[0][0]
-            sim_dt = _dt(now_kst.year, now_kst.month, now_kst.day,
+            check = now_kst.date()
+            for _ in range(7):
+                if check.weekday() < 5 and check not in kr_hol:
+                    break
+                check -= timedelta(days=1)
+            sim_dt = _dt(check.year, check.month, check.day,
                          first_slot.hour, first_slot.minute,
                          tzinfo=now_kst.tzinfo)
-            logger.info("DRY-RUN 장외: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%H:%M"))
+            logger.info("DRY-RUN 장외: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%Y-%m-%d %H:%M"))
         else:
             logger.info("DRY-RUN 장중: 실제 시각 기준 회차 사용 (%s)", now_kst.strftime("%H:%M"))
 
@@ -201,8 +213,8 @@ def run_trading():
         session_log.append(loop_entry)
 
         if i < INNER_LOOP_COUNT - 1:
-            logger.info("30초 대기 중...")
-            time.sleep(30)
+            logger.info("%d초 대기 중...", INNER_LOOP_SLEEP_SEC)
+            time.sleep(INNER_LOOP_SLEEP_SEC)
 
     # 세션 최종 요약 — LLM 1회 호출로 전체 정리
     progress["status"] = "summarizing"

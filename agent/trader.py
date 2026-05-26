@@ -110,6 +110,17 @@ class TradingAgent:
                     if cancelled:
                         logger.info("미체결 주문 %d건 취소: %s", len(cancelled),
                                     [(c["ticker"], c["order_no"], c["success"]) for c in cancelled])
+                        from data.trade_log import log_cancel
+                        for c in cancelled:
+                            if c.get("success") and c.get("action") == "BUY" and c.get("quantity", 0) > 0:
+                                log_cancel(
+                                    ticker=c["ticker"],
+                                    quantity=c["quantity"],
+                                    price=c.get("price", 0),
+                                    order_no=c["order_no"],
+                                    name=c.get("name", ""),
+                                )
+                                logger.info("미체결 BUY 취소 기록: %s %d주", c["ticker"], c["quantity"])
                 except Exception as e:
                     logger.warning("미체결 주문 취소 중 오류 (무시하고 계속): %s", e)
 

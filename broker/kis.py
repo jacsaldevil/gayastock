@@ -656,6 +656,9 @@ class KISBroker:
                 r = self.cancel_order(order["order_no"], order.get("krx_fwdg_ord_orgno", ""))
                 r["ticker"] = order["ticker"]
                 r["name"] = order["name"]
+                r["action"] = order["action"]
+                r["quantity"] = order["remaining_qty"]
+                r["price"] = order["order_price"]
                 results.append(r)
                 logger.info("주문 취소: %s %s → %s", order["ticker"], order["order_no"], r["message"])
             except Exception as e:
@@ -665,6 +668,9 @@ class KISBroker:
                     "order_no": order["order_no"],
                     "ticker": order["ticker"],
                     "name": order["name"],
+                    "action": order["action"],
+                    "quantity": order["remaining_qty"],
+                    "price": order["order_price"],
                     "message": str(e),
                 })
         return results
