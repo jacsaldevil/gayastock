@@ -1065,7 +1065,9 @@ elif page == "매매 이력":
             display_df["일시"] = display_df["일시"].dt.strftime("%Y-%m-%d %H:%M")
             display_df["체결가"] = display_df["체결가"].apply(lambda x: f"₩{x:,.0f}")
             display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")
-            display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
+            display_df["구분"] = display_df["구분"].apply(
+                lambda x: "🟢 매수" if x == "BUY" else ("⬜ 취소" if x == "CANCEL" else "🔴 매도")
+            )
             st.dataframe(display_df, use_container_width=True, hide_index=True)
 
             # ── 다운로드 ──────────────────────────────────────
