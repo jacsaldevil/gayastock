@@ -213,8 +213,8 @@ def run_trading():
         session_log.append(loop_entry)
 
         if i < INNER_LOOP_COUNT - 1:
-            logger.info("30초 대기 중...")
-            time.sleep(30)
+            logger.info("%d초 대기 중...", INNER_LOOP_SLEEP_SEC)
+            time.sleep(INNER_LOOP_SLEEP_SEC)
 
     # 세션 최종 요약 — LLM 1회 호출로 전체 정리
     progress["status"] = "summarizing"
