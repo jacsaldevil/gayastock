@@ -1,9 +1,12 @@
 """Gemini function calling 도구 정의 및 실행 핸들러"""
 import json
+import logging
 import os
 import re
 from vertexai.generative_models import Tool, FunctionDeclaration
 from data.trade_log import log_trade
+
+logger = logging.getLogger(__name__)
 
 def _is_dry_run() -> bool:
     return os.environ.get("DRY_RUN", "false").lower() == "true"
@@ -26,6 +29,29 @@ def set_sim_portfolio(portfolio: dict | None) -> None:
 
 def get_sim_portfolio() -> dict | None:
     return _sim_portfolio
+
+
+# ── 당일 손절 종목 블락 (코드 레벨 강제) ────────────────────────
+_stopped_out_today: set[str] = set()
+
+
+def load_stopped_out_today() -> None:
+    """세션 시작 시 오늘 손절 이력을 trade_log에서 읽어 블락 목록 초기화."""
+    global _stopped_out_today
+    _stopped_out_today = set()
+    try:
+        from data.trade_log import get_trades
+        from data.utils import get_now_kst
+        today = get_now_kst().date().isoformat()
+        for t in get_trades(limit=500):
+            if (t.get("ts", "")[:10] == today
+                    and t.get("action") == "SELL"
+                    and "손절" in t.get("reason", "")):
+                _stopped_out_today.add(t["ticker"])
+        if _stopped_out_today:
+            logger.info("당일 손절 블락 로드: %s", ", ".join(sorted(_stopped_out_today)))
+    except Exception as e:
+        logger.warning("당일 손절 블락 로드 실패: %s", e)
 
 
 def _validate_ticker(ticker: str):
@@ -208,6 +234,13 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             if qty <= 0:
                 return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
 
+            if ticker in _stopped_out_today:
+                logger.info("당일 손절 블락 차단: %s", ticker)
+                return json.dumps({
+                    "success": False,
+                    "message": f"{ticker} 당일 손절 종목 — 재진입 금지 (반복 손실 방지)",
+                }, ensure_ascii=False)
+
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
             stock_name = price_info.get("name", "") or ticker
@@ -334,6 +367,11 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                 result["reason"] = reason
                 if result["success"]:
                     log_trade("SELL", ticker, qty, current_price, reason, True, stock_name, realized_profit, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
+
+            # 손절 매도 시 당일 재진입 블락 등록 (dry-run / 실거래 공통)
+            if "손절" in reason and (result or {}).get("success"):
+                _stopped_out_today.add(ticker)
+                logger.info("당일 손절 블락 등록: %s", ticker)
 
         else:
             result = {"error": f"알 수 없는 tool: {tool_name}"}

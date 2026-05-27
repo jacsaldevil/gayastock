@@ -102,6 +102,9 @@ class TradingAgent:
         self.sim_portfolio_out: dict | None = None
         set_sim_portfolio(sim_portfolio_in)
 
+        from agent.tools import load_stopped_out_today
+        load_stopped_out_today()
+
         try:
             # 실전 모드 + 첫 루프에서만 미체결 주문 전량 취소
             if cancel_pending and os.environ.get("DRY_RUN", "false").lower() != "true":
