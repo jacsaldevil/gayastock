@@ -19,6 +19,36 @@ _TRADE_BLOB = "logs/trades.jsonl"
 _AGENT_BLOB = "logs/agent_runs.jsonl"
 
 
+# ── 날짜 기반 트리밍 ─────────────────────
+
+def _trim_to_latest_day(existing: list[str], new_line: str) -> list[str]:
+    """새 레코드가 기존 최신 날짜보다 미래면 이전 로그 전체 삭제 (장 오픈일 단위 보존)."""
+    if not existing:
+        return [new_line]
+    try:
+        new_date = json.loads(new_line).get("ts", "")[:10]
+    except Exception:
+        return existing + [new_line]
+    if not new_date:
+        return existing + [new_line]
+    # 기존 레코드 중 최신 날짜를 역순 탐색으로 빠르게 찾기
+    latest_existing = None
+    for line in reversed(existing):
+        if not line.strip():
+            continue
+        try:
+            ts = json.loads(line).get("ts", "")[:10]
+            if ts:
+                latest_existing = ts
+                break
+        except Exception:
+            break
+    if latest_existing and new_date > latest_existing:
+        logger.info("새 거래일 감지 (%s → %s) — 이전 로그 삭제", latest_existing, new_date)
+        return [new_line]
+    return existing + [new_line]
+
+
 # ── GCS 헬퍼 ────────────────────────────
 
 _gcs_lock = threading.Lock()  # 프로세스 내 동시 쓰기 직렬화
@@ -36,7 +66,7 @@ def _gcs_read_lines(blob_name: str) -> list[str]:
         return []
 
 
-def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) -> bool:
+def _gcs_append_line(blob_name: str, line: str) -> bool:
     """generation match + 재시도로 동시 쓰기 충돌 방지."""
     try:
         from google.cloud import storage
@@ -58,10 +88,8 @@ def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) 
                         else:
                             raise
 
-                    lines = [l for l in existing.splitlines() if l.strip()]
-                    lines.append(line)
-                    if max_records:
-                        lines = lines[-max_records:]
+                    existing_lines = [l for l in existing.splitlines() if l.strip()]
+                    lines = _trim_to_latest_day(existing_lines, line)
 
                     blob.upload_from_string(
                         "\n".join(lines) + "\n",
@@ -89,17 +117,12 @@ def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) 
 
 # ── 로칼 파일 헬퍼 ────────────────────
 
-def _local_append(filepath: str, line: str, max_records: int | None = None):
+def _local_append(filepath: str, line: str):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    if max_records:
-        lines = _local_read_lines(filepath)
-        lines.append(line)
-        lines = lines[-max_records:]
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    else:
-        with open(filepath, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+    existing = [l for l in _local_read_lines(filepath) if l.strip()]
+    lines = _trim_to_latest_day(existing, line)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 def _local_read_lines(filepath: str) -> list[str]:
@@ -111,13 +134,13 @@ def _local_read_lines(filepath: str) -> list[str]:
 
 # ── 공통 ─────────────────────────
 
-def _append(blob_name: str, filepath: str, record: dict, max_records: int | None = None):
+def _append(blob_name: str, filepath: str, record: dict):
     line = json.dumps(record, ensure_ascii=False)
     if _GCS_BUCKET:
-        if _gcs_append_line(blob_name, line, max_records):
+        if _gcs_append_line(blob_name, line):
             return
         logger.warning("GCS 쓰기 실패 — 로컬 파일 fallback: %s", filepath)
-    _local_append(filepath, line, max_records)
+    _local_append(filepath, line)
 
 
 def _read_all(blob_name: str, filepath: str) -> list[dict]:
@@ -134,9 +157,6 @@ def _read_all(blob_name: str, filepath: str) -> list[dict]:
 
 
 # ── 공개 API ───────────────────────
-
-_MAX_TRADE_RECORDS = 1000    # 매매 로그 최대 보존 건수
-_MAX_AGENT_RECORDS = 500     # 에이전트 실행 로그 최대 보존 건수 (20회/일 × 25일)
 
 
 def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool,
@@ -158,7 +178,7 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
         record["ha_pattern"] = ha_pattern
     if action == "SELL":
         record["profit"] = profit
-    _append(_TRADE_BLOB, TRADE_LOG_FILE, record, max_records=_MAX_TRADE_RECORDS)
+    _append(_TRADE_BLOB, TRADE_LOG_FILE, record)
 
 
 def log_cancel(ticker: str, quantity: int, price: int, order_no: str, name: str = ""):
@@ -174,7 +194,7 @@ def log_cancel(ticker: str, quantity: int, price: int, order_no: str, name: str 
         "order_no": order_no,
         "reason": "미체결 주문 취소",
         "success": True,
-    }, max_records=_MAX_TRADE_RECORDS)
+    })
 
 
 def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict,
@@ -186,7 +206,7 @@ def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict,
         "portfolio": portfolio_snapshot,
         "buy_tickers": buy_tickers or [],
         "loops": loops or [],
-    }, max_records=_MAX_AGENT_RECORDS)
+    })
 
 
 def get_trades(limit: int = 200) -> list[dict]:
