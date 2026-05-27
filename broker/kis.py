@@ -543,7 +543,7 @@ class KISBroker:
 
     # ── 분봉 / 하이킨아시 ────────────────────────────────────
 
-    def get_minute_candles(self, ticker: str, ha_candle_count: int = 30) -> dict:
+    def get_minute_candles(self, ticker: str, ha_candle_count: int = 60) -> dict:
         """1분봉 조회 후 VWAP 계산 + 3분봉 집계 + 하이킨아시 계산 반환 (TR: FHKST03010200)"""
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
         now = get_now_kst().strftime("%H%M%S")
