@@ -197,38 +197,6 @@ def log_cancel(ticker: str, quantity: int, price: int, order_no: str, name: str 
     })
 
 
-def log_cancel(ticker: str, quantity: int, price: int, order_no: str, name: str = ""):
-    """미체결 주문 취소 기록 — BUY 접수 후 미체결 취소 시 trade_log 정합성 유지용."""
-    _append(_TRADE_BLOB, TRADE_LOG_FILE, {
-        "ts": get_now_kst().isoformat(),
-        "action": "CANCEL",
-        "ticker": ticker,
-        "name": name,
-        "quantity": quantity,
-        "price": price,
-        "amount": price * quantity,
-        "order_no": order_no,
-        "reason": "미체결 주문 취소",
-        "success": True,
-    }, max_records=_MAX_TRADE_RECORDS)
-
-
-def log_cancel(ticker: str, quantity: int, price: int, order_no: str, name: str = ""):
-    """미체결 주문 취소 기록 — BUY 접수 후 미체결 취소 시 trade_log 정합성 유지용."""
-    _append(_TRADE_BLOB, TRADE_LOG_FILE, {
-        "ts": get_now_kst().isoformat(),
-        "action": "CANCEL",
-        "ticker": ticker,
-        "name": name,
-        "quantity": quantity,
-        "price": price,
-        "amount": price * quantity,
-        "order_no": order_no,
-        "reason": "미체결 주문 취소",
-        "success": True,
-    }, max_records=_MAX_TRADE_RECORDS)
-
-
 def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict,
                   buy_tickers: list = None, loops: list = None):
     _append(_AGENT_BLOB, AGENT_LOG_FILE, {
