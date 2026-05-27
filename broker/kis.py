@@ -15,19 +15,23 @@ logger = logging.getLogger(__name__)
 
 TOKEN_CACHE_FILE = ".kis_token_cache.json"
 TOKEN_CACHE_BLOB = "kis_token_cache.json"
-# GCS_TOKEN_BUCKET 우선, 없으면 GCS_DATA_BUCKET 공유 (Cloud Run 환경)
-_GCS_BUCKET = (os.environ.get("GCS_TOKEN_BUCKET") or os.environ.get("GCS_DATA_BUCKET", "")).strip()
+
+
+def _token_gcs_bucket() -> str:
+    # 모듈 로드 시점이 아닌 호출 시점에 읽어 Cloud Run 환경변수 지연 세팅 대응
+    return (os.environ.get("GCS_TOKEN_BUCKET") or os.environ.get("GCS_DATA_BUCKET", "")).strip()
 
 
 def _gcs_read_token() -> dict | None:
-    if not _GCS_BUCKET:
+    bucket = _token_gcs_bucket()
+    if not bucket:
         logger.warning("GCS 토큰 캐시: GCS_DATA_BUCKET 미설정 — 매 실행마다 토큰 재발급됨")
         return None
     try:
         from google.cloud import storage
-        blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
+        blob = storage.Client().bucket(bucket).blob(TOKEN_CACHE_BLOB)
         text = blob.download_as_text()
-        logger.info("GCS 토큰 캐시 읽기 성공 (bucket=%s)", _GCS_BUCKET)
+        logger.info("GCS 토큰 캐시 읽기 성공 (bucket=%s)", bucket)
         return json.loads(text)
     except Exception as e:
         if "404" in str(e) or "NotFound" in type(e).__name__:
@@ -38,12 +42,14 @@ def _gcs_read_token() -> dict | None:
 
 
 def _gcs_write_token(data: dict):
-    if not _GCS_BUCKET:
+    bucket = _token_gcs_bucket()
+    if not bucket:
         return
     try:
         from google.cloud import storage
-        blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
+        blob = storage.Client().bucket(bucket).blob(TOKEN_CACHE_BLOB)
         blob.upload_from_string(json.dumps(data), content_type="application/json")
+        logger.info("GCS 토큰 캐시 저장 완료 (bucket=%s)", bucket)
     except Exception as e:
         logger.warning("GCS 토큰 저장 실패 (%s): %s", type(e).__name__, e)
 
