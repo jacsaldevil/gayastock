@@ -5,6 +5,7 @@ import os
 import re
 from vertexai.generative_models import Tool, FunctionDeclaration
 from data.trade_log import log_trade
+from config import VWAP_MIN_ENTRY_PCT, VWAP_MAX_ENTRY_PCT, MAX_DAILY_BUY_PER_TICKER
 
 logger = logging.getLogger(__name__)
 
@@ -31,27 +32,41 @@ def get_sim_portfolio() -> dict | None:
     return _sim_portfolio
 
 
-# ── 당일 손절 종목 블락 (코드 레벨 강제) ────────────────────────
+# ── 당일 손절 블락 / 일일 매수 횟수 (코드 레벨 강제) ────────────────
 _stopped_out_today: set[str] = set()
+_daily_buy_count: dict[str, int] = {}
+
+
+def _is_stoploss_reason(reason: str) -> bool:
+    """손절 매도 여부 판단 — reason 문구(손절/SL:)에 관계없이 일관 적용"""
+    r = reason.replace("[DRY-RUN] ", "")
+    return "손절" in r or r.startswith("SL") or "stop" in r.lower()
 
 
 def load_stopped_out_today() -> None:
-    """세션 시작 시 오늘 손절 이력을 trade_log에서 읽어 블락 목록 초기화."""
-    global _stopped_out_today
+    """세션 시작 시 오늘 매매 이력을 trade_log에서 읽어 손절 블락 / 일일 매수 횟수 초기화."""
+    global _stopped_out_today, _daily_buy_count
     _stopped_out_today = set()
+    _daily_buy_count = {}
     try:
         from data.trade_log import get_trades
         from data.utils import get_now_kst
         today = get_now_kst().date().isoformat()
         for t in get_trades(limit=500):
-            if (t.get("ts", "")[:10] == today
-                    and t.get("action") == "SELL"
-                    and "손절" in t.get("reason", "")):
+            if t.get("ts", "")[:10] != today:
+                continue
+            if t.get("action") == "BUY" and t.get("success", True):
+                tk = t["ticker"]
+                _daily_buy_count[tk] = _daily_buy_count.get(tk, 0) + 1
+            elif t.get("action") == "SELL" and _is_stoploss_reason(t.get("reason", "")):
                 _stopped_out_today.add(t["ticker"])
         if _stopped_out_today:
             logger.info("당일 손절 블락 로드: %s", ", ".join(sorted(_stopped_out_today)))
+        if _daily_buy_count:
+            logger.info("당일 매수 횟수 로드: %s",
+                        ", ".join(f"{k}={v}회" for k, v in sorted(_daily_buy_count.items())))
     except Exception as e:
-        logger.warning("당일 손절 블락 로드 실패: %s", e)
+        logger.warning("당일 매매 상태 로드 실패: %s", e)
 
 
 def _validate_ticker(ticker: str):
@@ -241,6 +256,35 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "message": f"{ticker} 당일 손절 종목 — 재진입 금지 (반복 손실 방지)",
                 }, ensure_ascii=False)
 
+            # VWAP 이탈률 가드레일 (코드 레벨)
+            if vwap_dev is not None:
+                if vwap_dev < VWAP_MIN_ENTRY_PCT:
+                    logger.info("VWAP 이탈률 부족 차단: %s (%.2f%% < +%.1f%%)", ticker, vwap_dev, VWAP_MIN_ENTRY_PCT)
+                    return json.dumps({
+                        "success": False,
+                        "message": (f"{ticker} VWAP 이탈률 {vwap_dev:+.2f}% — "
+                                    f"최소 +{VWAP_MIN_ENTRY_PCT:.1f}% 미만 진입 금지 (모멘텀 부족)"),
+                    }, ensure_ascii=False)
+                if vwap_dev > VWAP_MAX_ENTRY_PCT:
+                    logger.info("VWAP 과추격 차단: %s (%.2f%% > +%.1f%%)", ticker, vwap_dev, VWAP_MAX_ENTRY_PCT)
+                    return json.dumps({
+                        "success": False,
+                        "message": (f"{ticker} VWAP 이탈률 {vwap_dev:+.2f}% — "
+                                    f"+{VWAP_MAX_ENTRY_PCT:.1f}% 초과 진입 금지 (고점 추격)"),
+                    }, ensure_ascii=False)
+            else:
+                logger.warning("buy_stock: vwap_dev 미제공 — VWAP 가드레일 미적용 (%s)", ticker)
+
+            # 종목당 일일 최대 매수 횟수 체크
+            buy_count = _daily_buy_count.get(ticker, 0)
+            if buy_count >= MAX_DAILY_BUY_PER_TICKER:
+                logger.info("일일 매수 한도 초과 차단: %s (%d/%d회)", ticker, buy_count, MAX_DAILY_BUY_PER_TICKER)
+                return json.dumps({
+                    "success": False,
+                    "message": (f"{ticker} 당일 {buy_count}회 매수 완료 — "
+                                f"최대 {MAX_DAILY_BUY_PER_TICKER}회 초과 금지"),
+                }, ensure_ascii=False)
+
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
             stock_name = price_info.get("name", "") or ticker
@@ -306,6 +350,11 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                 if result["success"]:
                     log_trade("BUY", ticker, qty, current_price, reason, True, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
 
+            # 성공 시 일일 매수 횟수 업데이트
+            if (result or {}).get("success"):
+                _daily_buy_count[ticker] = _daily_buy_count.get(ticker, 0) + 1
+                logger.info("일일 매수 횟수: %s → %d/%d회", ticker, _daily_buy_count[ticker], MAX_DAILY_BUY_PER_TICKER)
+
         elif tool_name == "sell_stock":
             ticker = tool_input["ticker"]
             _validate_ticker(ticker)
@@ -369,7 +418,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     log_trade("SELL", ticker, qty, current_price, reason, True, stock_name, realized_profit, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
 
             # 손절 매도 시 당일 재진입 블락 등록 (dry-run / 실거래 공통)
-            if "손절" in reason and (result or {}).get("success"):
+            if _is_stoploss_reason(reason) and (result or {}).get("success"):
                 _stopped_out_today.add(ticker)
                 logger.info("당일 손절 블락 등록: %s", ticker)
 
