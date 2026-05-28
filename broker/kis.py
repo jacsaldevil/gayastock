@@ -54,6 +54,9 @@ def _gcs_write_token(data: dict):
         logger.warning("GCS 토큰 저장 실패 (%s): %s", type(e).__name__, e)
 
 
+_KIS_TOKEN_ERROR_CODES = frozenset({"EGW00121", "EGW00123", "EGW00124"})
+
+
 class KISBroker:
     def __init__(self):
         self.base_url = KIS_BASE_URL
@@ -158,6 +161,30 @@ class KISBroker:
         """초당 API 호출 제한 방지 (공식 패턴 참고)"""
         time.sleep(0.05)
 
+    def _api_call(self, method: str, url: str, tr_id: str, **kwargs) -> requests.Response:
+        """KIS API 단일 호출 포인트 — 토큰 오류 감지 시 1회 재발급 후 재시도"""
+        for attempt in range(2):
+            res = requests.request(method, url, headers=self._headers(tr_id), **kwargs)
+            if attempt == 0:
+                need_reissue = res.status_code == 401
+                msg_cd = ""
+                if not need_reissue:
+                    try:
+                        body = res.json()
+                        msg_cd = body.get("msg_cd", "")
+                        if body.get("rt_cd") == "1" and msg_cd in _KIS_TOKEN_ERROR_CODES:
+                            need_reissue = True
+                    except Exception:
+                        pass
+                if need_reissue:
+                    logger.warning("KIS 토큰 오류 감지 (status=%d, msg_cd=%s) — 강제 재발급 후 재시도",
+                                   res.status_code, msg_cd)
+                    self._access_token = None
+                    self._token_expires_at = None
+                    continue
+            return res
+        return res
+
     # ── 시세 조회 ──────────────────────────────────────────
 
     def get_top_volume_stocks(self, n: int = 20) -> list[dict]:
@@ -177,7 +204,7 @@ class KISBroker:
             "FID_INPUT_DATE_1": "",
         }
         # 충분히 많이 가져와서 필터 후 n개 확보
-        res = requests.get(url, headers=self._headers("FHPST01710000"), params=params, timeout=10)
+        res = self._api_call("GET", url, "FHPST01710000", params=params, timeout=10)
         res.raise_for_status()
         output = res.json().get("output", [])
         self._smart_sleep()
@@ -207,7 +234,7 @@ class KISBroker:
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": ticker,
         }
-        res = requests.get(url, headers=self._headers("FHKST01010100"), params=params, timeout=10)
+        res = self._api_call("GET", url, "FHKST01010100", params=params, timeout=10)
         res.raise_for_status()
         output = res.json().get("output", {})
         self._smart_sleep()
@@ -235,7 +262,7 @@ class KISBroker:
         """재무 API 호출 — 500 에러 시 1회 재시도"""
         for attempt in range(2):
             try:
-                res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+                res = self._api_call("GET", url, tr_id, params=params, timeout=10)
                 if res.status_code == 500 and attempt == 0:
                     logger.warning("재무 API 500 에러, 1초 후 재시도 (%s)", url)
                     time.sleep(1)
@@ -337,7 +364,7 @@ class KISBroker:
             "FID_PERIOD_DIV_CODE": "D",
             "FID_ORG_ADJ_PRC": "0",
         }
-        res = requests.get(url, headers=self._headers("FHKST03010100"), params=params, timeout=10)
+        res = self._api_call("GET", url, "FHKST03010100", params=params, timeout=10)
         res.raise_for_status()
         output = res.json().get("output2", [])
         self._smart_sleep()
@@ -426,7 +453,7 @@ class KISBroker:
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
         }
-        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res = self._api_call("GET", url, tr_id, params=params, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
@@ -509,7 +536,7 @@ class KISBroker:
             "ORD_QTY": str(quantity),
             "ORD_UNPR": str(price),
         }
-        res = requests.post(url, headers=self._headers(tr_id), json=body, timeout=10)
+        res = self._api_call("POST", url, tr_id, json=body, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
@@ -531,7 +558,7 @@ class KISBroker:
             "ORD_QTY": str(quantity),
             "ORD_UNPR": str(price),
         }
-        res = requests.post(url, headers=self._headers(tr_id), json=body, timeout=10)
+        res = self._api_call("POST", url, tr_id, json=body, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
@@ -554,7 +581,7 @@ class KISBroker:
             "FID_INPUT_HOUR_1": now,
             "FID_PW_DATA_INCU_YN": "Y",
         }
-        res = requests.get(url, headers=self._headers("FHKST03010200"), params=params, timeout=10)
+        res = self._api_call("GET", url, "FHKST03010200", params=params, timeout=10)
         res.raise_for_status()
         data_json = res.json()
         output = data_json.get("output2", [])
@@ -603,7 +630,7 @@ class KISBroker:
             "INQR_DVSN_1": "0",
             "INQR_DVSN_2": "0",
         }
-        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res = self._api_call("GET", url, tr_id, params=params, timeout=10)
         res.raise_for_status()
         output = res.json().get("output", [])
         self._smart_sleep()
@@ -643,7 +670,7 @@ class KISBroker:
             "ORD_UNPR": "0",
             "QTY_ALL_ORD_YN": "Y",
         }
-        res = requests.post(url, headers=self._headers(tr_id), json=body, timeout=10)
+        res = self._api_call("POST", url, tr_id, json=body, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
@@ -703,7 +730,7 @@ class KISBroker:
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
         }
-        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res = self._api_call("GET", url, tr_id, params=params, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
