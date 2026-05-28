@@ -7,3 +7,5 @@ schedule>=1.2.0
 streamlit>=1.35.0
 plotly>=5.22.0
 holidays>=0.46
+fastapi>=0.111.0
+uvicorn>=0.29.0

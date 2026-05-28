@@ -22,35 +22,70 @@ _GCS_DATA_BUCKET = os.environ.get("GCS_DATA_BUCKET", "")
 _SETTINGS_BLOB = "settings.json"
 
 
+_settings_load_error: str = ""
+_settings_load_info: str = ""
+
+
 def _load_settings() -> dict:
+    """GCS 공개 URL → 인증 읽기 → 로컬 순으로 설정 읽기"""
+    global _settings_load_error, _settings_load_info
+    _settings_load_error = ""
+    _settings_load_info = ""
     if _GCS_DATA_BUCKET:
+        import urllib.request, urllib.error
+        bucket = _GCS_DATA_BUCKET.strip()
+        url = f"https://storage.googleapis.com/{bucket}/{_SETTINGS_BLOB}"
+        # 1단계: 공개 URL로 읽기 (인증 없이)
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                _settings_load_info = f"공개 URL 읽기 성공: {data}"
+                return data
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                _settings_load_info = f"settings.json 없음 (공개 URL 404) — 아직 저장 안 됨"
+            else:
+                _settings_load_info = f"공개 URL {e.code}: {e.reason} — 인증 읽기 시도"
+        except Exception as e:
+            _settings_load_info = f"공개 URL 실패: {type(e).__name__} — 인증 읽기 시도"
+
+        # 2단계: 인증된 GCS 클라이언트로 읽기
         try:
             from google.cloud import storage
-            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
-            if blob.exists():
-                return json.loads(blob.download_as_text())
-            return {}  # GCS 설정됐지만 아직 저장된 값 없음 → 로컬 참조 안 함
-        except Exception:
-            pass
-        return {}
-    # GCS 미설정 → 로컬 파일
+            blob = storage.Client().bucket(bucket).blob(_SETTINGS_BLOB)
+            data = json.loads(blob.download_as_text(encoding="utf-8"))
+            _settings_load_info += f" | 인증 읽기 성공: {data}"
+            return data
+        except Exception as e2:
+            err = str(e2)
+            if "404" in err or "NotFound" in type(e2).__name__:
+                _settings_load_info += " | 인증 읽기: 404 없음"
+                return {}
+            _settings_load_error = f"[{type(e2).__name__}] {err[:120]}"
+            logger.warning("settings GCS 인증 읽기 실패: %s", e2)
+            return {}
     try:
         with open(".dashboard_settings.json", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+            _settings_load_info = f"로컬 파일 읽기 성공: {data}"
+            return data
     except Exception:
         return {}
 
 
 def _save_settings(data: dict) -> str:
     """저장 위치 반환: 'gcs' | 'local' | 'error'"""
-    # 기존 설정과 병합
     existing = _load_settings()
     existing.update(data)
     if _GCS_DATA_BUCKET:
         try:
             from google.cloud import storage
-            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_SETTINGS_BLOB)
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET.strip()).blob(_SETTINGS_BLOB)
             blob.upload_from_string(json.dumps(existing), content_type="application/json")
+            try:
+                blob.make_public()  # 공개 URL 읽기 가능하도록
+            except Exception:
+                pass  # Uniform Bucket-Level Access 환경에서는 IAM으로 처리됨
             return "gcs"
         except Exception as e:
             logger.warning("settings GCS 저장 실패: %s", e)
@@ -63,27 +98,34 @@ def _save_settings(data: dict) -> str:
 
 
 def _get_initial_capital() -> int:
-    """GCS 설정 → 환경변수 순으로 투자금액 반환"""
+    """세션 상태 → GCS 설정 → 환경변수 순으로 투자금액 반환"""
+    # 저장 직후 세션 내에서 즉시 반영되도록 session_state 우선 사용
+    if "initial_capital" in st.session_state:
+        return int(st.session_state["initial_capital"])
     settings = _load_settings()
     val = settings.get("initial_capital", 0)
-    if val > 0:
-        return val
-    return _INITIAL_CAPITAL_ENV
+    result = val if val > 0 else _INITIAL_CAPITAL_ENV
+    st.session_state["initial_capital"] = result
+    return result
 
 
 def _get_sim_datetime(live: bool):
-    """장외 시뮬 실행 시 1회차 조건 강제, 장중이면 None(실제 시각)"""
+    """시뮬(not live): 최근 거래일의 1회차(09:20) 시간으로 강제. 실전: None(실제 시각)."""
     if live:
         return None
     from agent.trader import _SCHEDULE_SLOTS
-    from datetime import datetime as _dt, time as _dtime
-    now_kst = get_now_kst()
-    if _dtime(9, 0) <= now_kst.time() <= _dtime(15, 30):
-        return None
+    import holidays as _hol
     first_slot = _SCHEDULE_SLOTS[0][0]
-    return _dt(now_kst.year, now_kst.month, now_kst.day,
-               first_slot.hour, first_slot.minute,
-               tzinfo=now_kst.tzinfo)
+    now_kst = get_now_kst()
+    check = now_kst.date()
+    kr_hol = _hol.SouthKorea(years=check.year)
+    for _ in range(7):
+        if check.weekday() < 5 and check not in kr_hol:
+            break
+        check -= timedelta(days=1)
+    return datetime(check.year, check.month, check.day,
+                    first_slot.hour, first_slot.minute,
+                    tzinfo=now_kst.tzinfo)
 
 st.set_page_config(
     page_title="gayastock 대시보드",
@@ -121,16 +163,37 @@ refresh = st.sidebar.button("🔄 새로고침")
 
 st.sidebar.divider()
 st.sidebar.markdown("**💰 투자금액 설정**")
+
+_CAPITAL_KEY = "capital_input_widget"
 _cur_capital = _get_initial_capital()
+if _settings_load_error:
+    st.sidebar.error(f"⚠️ GCS 읽기 오류: {_settings_load_error}")
+
+with st.sidebar.expander("🔍 설정 진단", expanded=bool(_settings_load_error)):
+    st.caption(f"버킷: `{_GCS_DATA_BUCKET or '미설정'}`")
+    st.caption(f"파일: `{_SETTINGS_BLOB}`")
+    st.caption(f"환경변수 INITIAL_CAPITAL: `{_INITIAL_CAPITAL_ENV:,}`")
+    st.caption(f"현재 투자금액: `{_cur_capital:,}`")
+    if _settings_load_info:
+        st.caption(f"읽기 결과: {_settings_load_info}")
+    if _settings_load_error:
+        st.caption(f"오류: {_settings_load_error}")
+
 _new_capital = st.sidebar.number_input(
     "투자 원금 (원)", min_value=0, step=10000,
     value=_cur_capital, format="%d",
     help="0이면 현재 예수금 기준으로 표시됩니다.",
     label_visibility="collapsed",
+    key=_CAPITAL_KEY,
 )
 if st.sidebar.button("저장", use_container_width=True):
-    _where = _save_settings({"initial_capital": int(_new_capital)})
+    _save_val = int(_new_capital)
+    _where = _save_settings({"initial_capital": _save_val})
     st.cache_data.clear()
+    if _where in ("gcs", "local"):
+        # 세션 상태 즉시 업데이트 — GCS 읽기 성공 여부와 무관하게 이번 세션에 반영
+        st.session_state["initial_capital"] = _save_val
+        st.session_state.pop(_CAPITAL_KEY, None)  # 위젯도 새 값으로 초기화
     if _where == "gcs":
         st.sidebar.success("✅ GCS 저장 완료 (영구 보존)")
     elif _where == "local":
@@ -140,6 +203,12 @@ if st.sidebar.button("저장", use_container_width=True):
     st.rerun()
 if not _GCS_DATA_BUCKET:
     st.sidebar.caption("⚠️ GCS 미설정 — 재배포 시 초기화됨")
+else:
+    st.sidebar.divider()
+    st.sidebar.markdown("**🔗 로그 직접 접근 URL**")
+    _base = f"https://storage.googleapis.com/{_GCS_DATA_BUCKET}"
+    st.sidebar.code(f"{_base}/logs/trades.jsonl", language=None)
+    st.sidebar.code(f"{_base}/logs/agent_runs.jsonl", language=None)
 
 @st.cache_data(ttl=30)
 def load_balance():
@@ -319,9 +388,167 @@ def _sim_delete(sim_id: str):
     _sim_save_index([x for x in _sim_load_index() if x["id"] != sim_id])
 
 
+_PROGRESS_BLOB = "session_progress.json"
+_PROGRESS_LOCAL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "logs", "session_progress.json")
+
+
+def _load_session_progress() -> dict:
+    """GCS 또는 로컬에서 세션 진행상황 읽기 (스케줄/대시보드 공용)."""
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            blob = storage.Client().bucket(_GCS_DATA_BUCKET).blob(_PROGRESS_BLOB)
+            data = json.loads(blob.download_as_text())
+            if data.get("status") in ("running", "summarizing", "llm_running"):
+                try:
+                    started = datetime.fromisoformat(data["started_at"])
+                    if started.tzinfo is None:
+                        started = started.replace(tzinfo=KST)
+                    if (get_now_kst() - started).total_seconds() > 1200:
+                        return {}
+                except Exception:
+                    return {}
+            return data
+        except Exception as e:
+            if "404" not in str(e) and "NotFound" not in type(e).__name__:
+                logger.warning("session_progress GCS 읽기 실패 — 로컬 폴백: %s", e)
+    try:
+        with open(_PROGRESS_LOCAL, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        pass
+    return {}
+    try:
+        with open(_PROGRESS_LOCAL, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _write_session_progress(data: dict):
+    """대시보드 실행 진행상황을 GCS/로컬에 기록."""
+    try:
+        os.makedirs(os.path.dirname(_PROGRESS_LOCAL), exist_ok=True)
+        with open(_PROGRESS_LOCAL, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+    if _GCS_DATA_BUCKET:
+        try:
+            from google.cloud import storage
+            storage.Client().bucket(_GCS_DATA_BUCKET).blob(_PROGRESS_BLOB).upload_from_string(
+                json.dumps(data, ensure_ascii=False), content_type="application/json"
+            )
+        except Exception as e:
+            logger.warning("session_progress GCS 쓰기 실패: %s", e)
+
+
 def _run_agent_bg(sim_id: str, live: bool):
-    """백그라운드 스레드: 에이전트 1회 실행, tool call마다 중간 결과 저장"""
-    def _mark_done_in_index(finished_at):
+    """백그라운드 스레드: 5루프 에이전트 실행, 루프마다 진행상황 기록."""
+    from config import INNER_LOOP_COUNT, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS
+    from agent.trader import TradingAgent
+    from agent.tools import _broker
+    from data.trade_log import log_agent_run
+
+    if not live:
+        os.environ["DRY_RUN"] = "true"
+
+    now = get_now_kst()
+    progress: dict = {
+        "session_id": sim_id,
+        "source": "dashboard",
+        "mode": "dry_run" if not live else "live",
+        "status": "running",
+        "started_at": now.isoformat(),
+        "total_loops": INNER_LOOP_COUNT,
+        "current_loop": 0,
+        "loops": [],
+    }
+    _write_session_progress(progress)
+
+    data: dict = {"id": sim_id, "status": "running", "created_at": now.isoformat(), "loops": []}
+    _sim_save_data(sim_id, data)
+
+    try:
+        agent = TradingAgent()
+        broker = _broker()
+        session_log: list[dict] = []
+        all_buy_tickers: list[str] = []
+
+        for i in range(INNER_LOOP_COUNT):
+            loop_entry: dict = {"loop": i + 1, "ha_signals": [], "result": None, "tool_log": []}
+            loop_p: dict = {"loop": i + 1, "status": "checking", "ha_signals": [], "needs_action": False}
+            progress["current_loop"] = i + 1
+            progress["loops"].append(loop_p)
+            _write_session_progress(progress)
+
+            if not live:
+                needs_action = True
+            else:
+                try:
+                    needs_action, ha_signals = _check_needs_action_dashboard(
+                        broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
+                    )
+                    loop_entry["ha_signals"] = ha_signals
+                    loop_p["ha_signals"] = ha_signals
+                except Exception:
+                    needs_action = True
+
+            loop_p["needs_action"] = needs_action
+            if needs_action:
+                loop_p["status"] = "llm_running"
+                _write_session_progress(progress)
+
+                def _on_tool_call(tool_log, _lp=loop_p, _le=loop_entry):
+                    _lp["tool_log"] = tool_log[-10:]
+                    _le["tool_log"] = tool_log
+                    _write_session_progress(progress)
+                    _sim_save_data(sim_id, data)
+
+                result = agent.run(
+                    cancel_pending=(i == 0),
+                    skip_log=True,
+                    sim_datetime=_get_sim_datetime(live),
+                    on_tool_call=_on_tool_call,
+                )
+                loop_entry["result"] = result
+                loop_p["result_preview"] = (result or "")[:300]
+                all_buy_tickers.extend(agent.buy_tickers)
+
+            loop_p["status"] = "done"
+            data["loops"].append(loop_entry)
+            _write_session_progress(progress)
+            _sim_save_data(sim_id, data)
+            session_log.append(loop_entry)
+
+            if i < INNER_LOOP_COUNT - 1:
+                import time as _t
+                _t.sleep(5)
+
+        # 세션 최종 요약
+        progress["status"] = "summarizing"
+        _write_session_progress(progress)
+        final_summary = agent.summarize_session(session_log)
+        data["final_summary"] = final_summary
+        try:
+            portfolio_snapshot = broker.get_balance()
+        except Exception:
+            portfolio_snapshot = {}
+        log_agent_run(None, final_summary, portfolio_snapshot,
+                      list(dict.fromkeys(all_buy_tickers)), session_log)
+
+    except Exception as e:
+        data["error"] = str(e)
+        progress["status"] = "done"
+    finally:
+        os.environ["DRY_RUN"] = "false"
+        finished_at = get_now_kst().isoformat()
+        data["status"] = "done"
+        data["finished_at"] = finished_at
+        progress["status"] = "done"
+        progress["finished_at"] = finished_at
+        _sim_save_data(sim_id, data)
+        _write_session_progress(progress)
         idx = _sim_load_index()
         entry = next((x for x in idx if x["id"] == sim_id), None)
         if entry:
@@ -329,42 +556,51 @@ def _run_agent_bg(sim_id: str, live: bool):
             entry["finished_at"] = finished_at
         _sim_save_index(idx)
 
-    if not live:
-        os.environ["DRY_RUN"] = "true"
-    data: dict = {
-        "id": sim_id, "status": "running",
-        "created_at": get_now_kst().isoformat(), "results": {},
-    }
-    _sim_save_data(sim_id, data)
-    try:
-        from agent.trader import TradingAgent
-        agent = TradingAgent()
 
-        def _on_tool_call(tool_log):
-            data["results"]["분석"] = {"result": "⏳ 분석 중...", "tool_log": tool_log}
-            _sim_save_data(sim_id, data)
+def _check_needs_action_dashboard(broker, take_profit_pct, stop_loss_pct, max_positions):
+    """대시보드 백그라운드 스레드용 사전 체크 (main._check_needs_action과 동일 로직)."""
+    portfolio = broker.get_balance()
+    holdings = portfolio.get("holdings", [])
+    ha_signals = []
 
-        result = agent.run(
-            [], sim_datetime=_get_sim_datetime(live),
-            sim_portfolio_in=None, skip_log=False,
-            on_tool_call=_on_tool_call,
-        )
-        data["results"]["분석"] = {"result": result, "tool_log": agent.tool_call_log}
-        _sim_save_data(sim_id, data)
-    except Exception as e:
-        data["results"]["분석"] = {"result": f"❌ 실행 오류: {e}", "tool_log": []}
-        _sim_save_data(sim_id, data)
-    finally:
-        os.environ["DRY_RUN"] = "false"
-        data["status"] = "done"
-        data["finished_at"] = get_now_kst().isoformat()
-        _sim_save_data(sim_id, data)
-        _mark_done_in_index(data["finished_at"])
+    for h in holdings:
+        rate = h.get("profit_loss_rate", 0)
+        if rate >= take_profit_pct or rate <= -stop_loss_pct:
+            return True, ha_signals
+
+    if len(holdings) < max_positions:
+        return True, ha_signals
+
+    for h in holdings:
+        ticker = h.get("ticker", "")
+        if not ticker:
+            continue
+        try:
+            result = broker.get_minute_candles(ticker)
+            candles = result.get("candles", [])
+            vwap_dev = result.get("vwap_deviation_pct", 0)
+            if not candles:
+                continue
+            latest = candles[-1]
+            signal = {
+                "ticker": ticker,
+                "name": result.get("name", ""),
+                "pattern": latest.get("pattern", ""),
+                "vwap_dev": round(float(vwap_dev), 2),
+                "bullish": latest.get("bullish", True),
+            }
+            ha_signals.append(signal)
+            if vwap_dev < 0:
+                return True, ha_signals
+        except Exception:
+            pass
+    return False, ha_signals
 
 
 def _launch_agent(live: bool) -> str | None:
     """에이전트를 백그라운드로 실행하고 sim_id 반환. 이미 실행 중이면 None."""
-    if next((x for x in _sim_load_index() if x.get("status") == "running"), None):
+    _existing = _load_session_progress()
+    if _existing.get("status") in ("running", "summarizing"):
         return None
     _now = get_now_kst()
     sim_id = _now.strftime("%Y%m%d_%H%M%S")
@@ -379,46 +615,21 @@ def _launch_agent(live: bool) -> str | None:
         "mode": mode_str, "status": "running", "finished_at": None,
     })
     _sim_save_index(idx)
+    # 스레드 시작 전에 progress를 먼저 기록 — st.rerun() 후 첫 렌더링에서
+    # _prog_active=True 가 되어 자동 새로고침 루프가 즉시 시작됨
+    _write_session_progress({
+        "session_id": sim_id,
+        "source": "dashboard",
+        "mode": "live" if live else "dry_run",
+        "status": "running",
+        "started_at": _now.isoformat(),
+        "total_loops": 1,
+        "current_loop": 0,
+        "loops": [],
+    })
     threading.Thread(target=_run_agent_bg, args=(sim_id, live), daemon=True).start()
     return sim_id
 
-
-def _show_sim_results(sim_data: dict):
-    import time as _time
-    status = sim_data.get("status", "")
-    finished_disp = (sim_data.get("finished_at") or "")[:16].replace("T", " ")
-    results = sim_data.get("results", {})
-
-    if status == "running":
-        entry = list(results.values())[0] if results else {}
-        tool_log = entry.get("tool_log", [])
-        if tool_log:
-            st.warning(f"⏳ 실행 중... — 도구 호출 {len(tool_log)}회 완료")
-            with st.expander(f"📡 실시간 호출 로그 ({len(tool_log)}회)", expanded=True):
-                for e in reversed(tool_log[-10:]):
-                    args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
-                    st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
-                    st.code(e["result_preview"], language="json")
-        else:
-            st.warning("⏳ 실행 중... — Gemini 연결 중 (잠시 후 자동 갱신)")
-        _time.sleep(3)
-        st.rerun()
-    elif status == "done":
-        st.success(f"✅ 완료 — {finished_disp}")
-
-    if not results:
-        return
-    entry = list(results.values())[0]
-    result_text = entry.get("result", "결과 없음")
-    if result_text != "⏳ 분석 중...":
-        st.markdown(result_text)
-    tool_log = entry.get("tool_log", [])
-    if tool_log and status == "done":
-        with st.expander(f"🔍 함수 호출 플로우 ({len(tool_log)}회)"):
-            for e in tool_log:
-                args_str = ", ".join(f"{k}={v}" for k, v in e["args"].items()) if e["args"] else ""
-                st.markdown(f"**[Round {e['round']}]** `{e['tool']}({args_str})`")
-                st.code(e["result_preview"], language="json")
 
 
 # ════════════════════════════════════════════════════════
@@ -443,11 +654,10 @@ if page == "포트폴리오":
 
     # 상단 요약 카드
     col1, col2, col3, col4, col5 = st.columns(5)
-    available_cash = data.get("cash", 0)   # dnca_tot_amt = 현재 예수금(가용현금)
+    available_cash = data.get("cash", 0)          # dnca_tot_amt: 예수금 (주식 매수 가능한 현금)
+    holdings_eval = data.get("holdings_eval", 0)  # scts_evlu_amt: 보유 주식 평가금액
     holdings = data.get("holdings", [])
-    # 평가금액 = 예수금 + 보유주식평가 (직접 계산, KIS tot_evlu_amt는 D+2 미결제 포함으로 차이 발생)
-    holding_eval = sum(h["current_price"] * h["quantity"] for h in holdings)
-    total_eval = available_cash + holding_eval
+    total_eval = available_cash + holdings_eval    # 평가금액 = 예수금 + 주식평가
 
     # 투자금액: 대시보드 설정 → 환경변수 → 예수금 순 fallback
     INITIAL_CAPITAL = _get_initial_capital()
@@ -462,49 +672,148 @@ if page == "포트폴리오":
                 delta_color="normal" if profit_loss >= 0 else "inverse")
     col5.metric("보유 종목 수", f"{len(holdings)}개")
 
+    # ── 보유 종목 (메트릭 카드 바로 아래) ─────────────────────────────
+    if holdings:
+        st.divider()
+        st.subheader("📌 보유 종목")
+        _hold_rows = []
+        for _h in holdings:
+            _rate    = _h.get("profit_loss_rate", 0)
+            _avg_p   = _h.get("avg_price", 0)
+            _qty     = _h.get("quantity", 0)
+            _cur_p   = _h.get("current_price", 0)
+            _buy_amt = _avg_p * _qty
+            _pl_amt  = (_cur_p - _avg_p) * _qty
+
+            if _rate >= 3.5:    _remark = "🎯 TP 임박"
+            elif _rate >= 1.5:  _remark = "📈 수익권"
+            elif _rate >= 0:    _remark = "🟡 보합"
+            elif _rate >= -2.0: _remark = "📉 손실권"
+            else:               _remark = "⚠️ SL 위험"
+
+            _hold_rows.append({
+                "종목명":   _h.get("name") or _h.get("ticker", ""),
+                "코드":     _h.get("ticker", ""),
+                "수량":     _qty,
+                "매수가":   _avg_p,
+                "현재가":   _cur_p,
+                "수익률":   _rate,
+                "매수금액": _buy_amt,
+                "손익":     _pl_amt,
+                "비고":     _remark,
+            })
+
+        _hdf = pd.DataFrame(_hold_rows)
+        st.dataframe(
+            _hdf.style
+                .map(lambda v: "color: #2ecc71" if v >= 0 else "color: #e74c3c",
+                     subset=["수익률", "손익"])
+                .format({
+                    "매수가":   "{:,.0f}",
+                    "현재가":   "{:,.0f}",
+                    "수익률":   "{:+.2f}%",
+                    "매수금액": "₩{:,.0f}",
+                    "손익":     "₩{:+,.0f}",
+                }),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     # ── 에이전트 상태 / 실행 버튼 ──────────────────────────────────────
     import time as _time
     import holidays as _hol
     from datetime import time as _dtime
 
-    _idx = _sim_load_index()
-    _running = next((x for x in _idx if x.get("status") == "running"), None)
+    _prog = _load_session_progress()
+    _prog_active = _prog.get("status") in ("running", "summarizing")
 
     st.divider()
 
-    if _running:
-        _sim = _sim_load_data(_running["id"])
-        _results = _sim.get("results", {})
-        _entry = list(_results.values())[0] if _results else {}
-        _tool_log = _entry.get("tool_log", [])
-        _created = (_running.get("created_at") or "")[:16].replace("T", " ")
-        _mode_label = "🔴 실전" if _running.get("mode") == "실전" else "🧪 시뮬"
+    if _prog_active:
+        _cur = _prog.get("current_loop", 0)
+        _tot = _prog.get("total_loops", 5)
+        _src = _prog.get("source", "scheduled")
+        _mode_label = "🔴 실전" if _prog.get("mode") == "live" else "🧪 시뮬/DRY"
+        _src_label = "대시보드" if _src == "dashboard" else "스케줄"
+        _is_summ = _prog.get("status") == "summarizing"
 
         with st.container(border=True):
             _hcol1, _hcol2 = st.columns([3, 1])
-            _hcol1.markdown(f"**⏳ 에이전트 실행 중 — {_mode_label}** &nbsp; `{_created} 시작`", unsafe_allow_html=True)
-            _hcol2.caption(f"도구 호출 {len(_tool_log)}회")
-            if _tool_log:
-                _last = _tool_log[-1]
-                _last_args = ", ".join(f"{k}={v}" for k, v in _last["args"].items()) if _last["args"] else ""
-                st.caption(f"현재: Round {_last['round']} → `{_last['tool']}({_last_args})`")
-                with st.expander("📡 실시간 호출 로그", expanded=True):
-                    for _e in reversed(_tool_log[-8:]):
-                        _a = ", ".join(f"{k}={v}" for k, v in _e["args"].items()) if _e["args"] else ""
-                        st.markdown(f"**[R{_e['round']}]** `{_e['tool']}({_a})`")
-                        st.code(_e["result_preview"], language="json")
+            _hcol1.markdown(
+                f"**⏳ 에이전트 실행 중 — {_mode_label} ({_src_label})**",
+                unsafe_allow_html=True,
+            )
+            if _is_summ:
+                _hcol2.caption("📝 최종 요약 중...")
             else:
-                st.caption("Gemini 연결 중...")
+                _hcol2.caption(f"루프 {_cur}/{_tot}")
+
+            if not _is_summ and _tot > 0:
+                st.progress(_cur / _tot, text=f"루프 {_cur} / {_tot}")
+
+            _loops = _prog.get("loops", [])
+            for _lp in _loops:
+                _lnum = _lp["loop"]
+                _lst = _lp.get("status", "")
+                _lna = _lp.get("needs_action", False)
+                _lha = _lp.get("ha_signals", [])
+                _ltl = _lp.get("tool_log", [])
+
+                if _lst == "done":
+                    _icon = "✅"
+                elif _lst == "llm_running":
+                    _icon = "🤖"
+                elif _lst == "checking":
+                    _icon = "🔍"
+                else:
+                    _icon = "⬜"
+
+                _ha_str = ""
+                if _lha:
+                    _ha_str = " | ".join(
+                        f"{s['ticker']} HA={s['pattern']} VWAP={s['vwap_dev']:+.1f}%"
+                        for s in _lha
+                    )
+
+                _action_str = ""
+                if _lst == "done":
+                    _action_str = "LLM 호출" if _lna else "스킵"
+                elif _lst == "llm_running":
+                    _last_tool = _ltl[-1] if _ltl else None
+                    if _last_tool:
+                        _targs = ", ".join(f"{k}={v}" for k, v in _last_tool["args"].items()) if _last_tool["args"] else ""
+                        _action_str = f"R{_last_tool['round']} → `{_last_tool['tool']}({_targs})`"
+                    else:
+                        _action_str = "Gemini 연결 중..."
+
+                st.caption(f"{_icon} 루프 {_lnum}: {_action_str}  {_ha_str}")
+
+                if _ltl and _lst == "llm_running":
+                    with st.expander(f"📡 루프 {_lnum} 실시간 호출 ({len(_ltl)}회)", expanded=True):
+                        for _te in reversed(_ltl[-6:]):
+                            _ta = ", ".join(f"{k}={v}" for k, v in _te["args"].items()) if _te["args"] else ""
+                            st.markdown(f"**[R{_te['round']}]** `{_te['tool']}({_ta})`")
+                            st.code(_te["result_preview"], language="json")
+
         _time.sleep(3)
         st.rerun()
-    else:
-        _now_kst = get_now_kst()
-        _live = (
-            _now_kst.weekday() < 5 and
-            _now_kst.date() not in _hol.Korea(years=[_now_kst.year]) and
-            _dtime(9, 0) <= _now_kst.time() <= _dtime(15, 30)
-        )
-        with st.expander("▶ 에이전트 실행", expanded=False):
+
+    _now_kst = get_now_kst()
+    _live = (
+        _now_kst.weekday() < 5 and
+        _now_kst.date() not in _hol.SouthKorea(years=[_now_kst.year]) and
+        _dtime(9, 0) <= _now_kst.time() <= _dtime(15, 30)
+    )
+    with st.expander("▶ 에이전트 실행", expanded=False):
+        if _prog_active:
+            _block_src = "스케줄" if _prog.get("source") == "scheduled" else "대시보드"
+            _block_loop = _prog.get("current_loop", 0)
+            _block_tot = _prog.get("total_loops", 5)
+            st.warning(
+                f"⚠️ 에이전트가 이미 실행 중입니다 ({_block_src} — 루프 {_block_loop}/{_block_tot})\n\n"
+                "현재 실행이 완료될 때까지 새로운 실행을 시작할 수 없습니다."
+            )
+        else:
             _pw = st.text_input("비밀번호", type="password", key="portfolio_run_pw")
             if _pw and _pw != "1018":
                 st.error("비밀번호가 올바르지 않습니다.")
@@ -604,41 +913,8 @@ if page == "포트폴리오":
 
     st.divider()
 
-    if not holdings:
-        st.info("현재 보유 종목이 없습니다.")
-    else:
-        # 보유 종목 테이블
-        st.subheader("보유 종목")
-        df = pd.DataFrame(holdings)
-        df["평가금액"] = df["current_price"] * df["quantity"]
-        df["매입금액"] = df["avg_price"] * df["quantity"]
-        df = df.rename(columns={
-            "ticker": "종목코드",
-            "name": "종목명",
-            "quantity": "수량",
-            "avg_price": "평균단가",
-            "current_price": "현재가",
-            "profit_loss_rate": "수익률(%)",
-        })
-        display_cols = ["종목코드", "종목명", "수량", "평균단가", "현재가", "수익률(%)", "평가금액"]
-
-        def color_pl(val):
-            color = "color: #e74c3c" if val < 0 else "color: #2ecc71" if val > 0 else ""
-            return color
-
-        st.dataframe(
-            df[display_cols].style.map(color_pl, subset=["수익률(%)"])  .format({
-                "평균단가": "{:,.0f}",
-                "현재가": "{:,.0f}",
-                "수익률(%)": "{:+.2f}%",
-                "평가금액": "₩{:,.0f}",
-            }),
-            use_container_width=True,
-        )
-
-        st.divider()
-
-        # 포트폴리오 비중 파이차트
+    if holdings:
+        # 포트폴리오 비중 차트
         col_chart1, col_chart2 = st.columns(2)
         with col_chart1:
             st.subheader("종목별 비중")
@@ -763,13 +1039,63 @@ elif page == "매매 이력":
 
             if "name" not in df.columns:
                 df["name"] = ""
-            display_df = df[["ts", "action", "ticker", "name", "quantity", "price", "amount", "success", "reason"]].copy()
-            display_df.columns = ["일시", "구분", "종목코드", "종목명", "수량", "체결가", "금액", "성공", "판단 근거"]
+            if "profit" not in df.columns:
+                df["profit"] = None
+            if "vwap_dev" not in df.columns:
+                df["vwap_dev"] = None
+            if "ha_pattern" not in df.columns:
+                df["ha_pattern"] = ""
+            # 종목명: name이 비어있거나 ticker와 같으면 ticker 표시
+            df["종목명"] = df.apply(
+                lambda r: r["name"] if r["name"] and r["name"] != r["ticker"] else r["ticker"], axis=1
+            )
+            # VWAP 이탈률 표시
+            df["VWAP%"] = df["vwap_dev"].apply(
+                lambda v: f"{v:+.1f}%" if v is not None and not (isinstance(v, float) and v != v) else "-"
+            )
+            # 실현손익: SELL 행만 표시
+            df["실현손익"] = df.apply(
+                lambda r: f"{'▲' if r['profit'] > 0 else '▼'} ₩{abs(r['profit']):,.0f}"
+                if r["action"] == "SELL" and r["profit"] is not None and r["profit"] != 0
+                else ("" if r["action"] == "BUY" else "-"),
+                axis=1,
+            )
+            display_df = df[["ts", "action", "ticker", "종목명", "VWAP%", "ha_pattern", "실현손익", "quantity", "price", "amount", "success", "reason"]].copy()
+            display_df.columns = ["일시", "구분", "종목코드", "종목명", "VWAP%", "HA패턴", "실현손익", "수량", "체결가", "금액", "성공", "판단 근거"]
             display_df["일시"] = display_df["일시"].dt.strftime("%Y-%m-%d %H:%M")
             display_df["체결가"] = display_df["체결가"].apply(lambda x: f"₩{x:,.0f}")
             display_df["금액"] = display_df["금액"].apply(lambda x: f"₩{x:,.0f}")
-            display_df["구분"] = display_df["구분"].apply(lambda x: "🟢 매수" if x == "BUY" else "🔴 매도")
+            display_df["구분"] = display_df["구분"].apply(
+                lambda x: "🟢 매수" if x == "BUY" else ("⬜ 취소" if x == "CANCEL" else "🔴 매도")
+            )
             st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+            # ── 다운로드 ──────────────────────────────────────
+            st.divider()
+            _dl1, _dl2 = st.columns(2)
+
+            # CSV 다운로드
+            _csv_cols = ["ts", "action", "ticker", "name", "vwap_dev", "ha_pattern",
+                         "quantity", "price", "amount", "profit", "success", "reason"]
+            _export_df = df[[c for c in _csv_cols if c in df.columns]].copy()
+            _export_df["ts"] = _export_df["ts"].dt.strftime("%Y-%m-%d %H:%M:%S")
+            _dl1.download_button(
+                label="📥 CSV 다운로드",
+                data=_export_df.to_csv(index=False).encode("utf-8-sig"),
+                file_name=f"trades_{get_now_kst().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+            )
+
+            # JSONL 다운로드 (원본 — Claude 분석용)
+            import json as _json
+            _raw_lines = "\n".join(_json.dumps(r, ensure_ascii=False) for r in trades)
+            _dl2.download_button(
+                label="📥 JSONL 다운로드 (Claude 분석용)",
+                data=_raw_lines.encode("utf-8"),
+                file_name=f"trades_{get_now_kst().strftime('%Y%m%d')}.jsonl",
+                mime="application/jsonlines",
+            )
+            st.caption("💡 JSONL 파일을 `logs/trades.jsonl`에 저장하면 Claude Code가 바로 분석합니다.")
 
 # ════════════════════════════════════════════════════════
 elif page == "에이전트 로그":

@@ -1,9 +1,13 @@
 """Gemini function calling 도구 정의 및 실행 핸들러"""
 import json
+import logging
 import os
 import re
 from vertexai.generative_models import Tool, FunctionDeclaration
 from data.trade_log import log_trade
+from config import VWAP_MIN_ENTRY_PCT, VWAP_MAX_ENTRY_PCT, MAX_DAILY_BUY_PER_TICKER
+
+logger = logging.getLogger(__name__)
 
 def _is_dry_run() -> bool:
     return os.environ.get("DRY_RUN", "false").lower() == "true"
@@ -26,6 +30,43 @@ def set_sim_portfolio(portfolio: dict | None) -> None:
 
 def get_sim_portfolio() -> dict | None:
     return _sim_portfolio
+
+
+# ── 당일 손절 블락 / 일일 매수 횟수 (코드 레벨 강제) ────────────────
+_stopped_out_today: set[str] = set()
+_daily_buy_count: dict[str, int] = {}
+
+
+def _is_stoploss_reason(reason: str) -> bool:
+    """손절 매도 여부 판단 — reason 문구(손절/SL:)에 관계없이 일관 적용"""
+    r = reason.replace("[DRY-RUN] ", "")
+    return "손절" in r or r.startswith("SL") or "stop" in r.lower()
+
+
+def load_stopped_out_today() -> None:
+    """세션 시작 시 오늘 매매 이력을 trade_log에서 읽어 손절 블락 / 일일 매수 횟수 초기화."""
+    global _stopped_out_today, _daily_buy_count
+    _stopped_out_today = set()
+    _daily_buy_count = {}
+    try:
+        from data.trade_log import get_trades
+        from data.utils import get_now_kst
+        today = get_now_kst().date().isoformat()
+        for t in get_trades(limit=500):
+            if t.get("ts", "")[:10] != today:
+                continue
+            if t.get("action") == "BUY" and t.get("success", True):
+                tk = t["ticker"]
+                _daily_buy_count[tk] = _daily_buy_count.get(tk, 0) + 1
+            elif t.get("action") == "SELL" and _is_stoploss_reason(t.get("reason", "")):
+                _stopped_out_today.add(t["ticker"])
+        if _stopped_out_today:
+            logger.info("당일 손절 블락 로드: %s", ", ".join(sorted(_stopped_out_today)))
+        if _daily_buy_count:
+            logger.info("당일 매수 횟수 로드: %s",
+                        ", ".join(f"{k}={v}회" for k, v in sorted(_daily_buy_count.items())))
+    except Exception as e:
+        logger.warning("당일 매매 상태 로드 실패: %s", e)
 
 
 def _validate_ticker(ticker: str):
@@ -59,15 +100,17 @@ GEMINI_TOOLS = Tool(
             name="buy_stock",
             description=(
                 "주식을 시장가로 매수합니다. "
-                "매수 전 get_portfolio로 예수금, get_stock_price로 현재가를 반드시 확인하세요. "
+                "매수 전 get_portfolio로 예수금, get_heikin_ashi_candles로 VWAP·HA를 반드시 확인하세요. "
                 "포지션 사이징: 가용예수금 × HA강도 비율 ÷ 남은 슬롯 수로 계산하세요."
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "ticker":   {"type": "string",  "description": "6자리 종목코드"},
-                    "quantity": {"type": "integer", "description": "매수 수량 (주)"},
-                    "reason":   {"type": "string",  "description": "매수 근거 (재무지표 수치 포함)"},
+                    "ticker":      {"type": "string",  "description": "6자리 종목코드"},
+                    "quantity":    {"type": "integer", "description": "매수 수량 (주)"},
+                    "reason":      {"type": "string",  "description": "매수 근거 (VWAP 이탈률, HA 패턴, 거래량 순위 포함)"},
+                    "vwap_dev":    {"type": "number",  "description": "매수 시점 VWAP 이탈률 (%) — get_heikin_ashi_candles의 vwap_deviation_pct"},
+                    "ha_pattern":  {"type": "string",  "description": "매수 시점 HA 패턴 — 예: 강한상승, 일반양봉, 음봉 등"},
                 },
                 "required": ["ticker", "quantity", "reason"],
             },
@@ -104,14 +147,50 @@ GEMINI_TOOLS = Tool(
             },
         ),
         FunctionDeclaration(
+            name="get_financial_summary",
+            description=(
+                "종목의 연간 재무 요약을 조회합니다 (최근 4개 연도). "
+                "반환값: revenue(매출), operating_profit(영업이익), net_profit(순이익), "
+                "operating_margin_pct(영업이익률%), roe_pct(ROE%), debt_ratio_pct(부채비율%), "
+                "per, pbr, eps. "
+                "매수 전 재무 건전성과 성장성을 파악하고 싶을 때 호출하세요."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "6자리 종목코드"},
+                },
+                "required": ["ticker"],
+            },
+        ),
+        FunctionDeclaration(
+            name="get_daily_price_chart",
+            description=(
+                "일봉 차트 데이터를 조회합니다. "
+                "반환값: 날짜별 open/high/low/close/volume/change_rate 목록. "
+                "중장기 추세, 지지/저항 구간, 최근 급등 여부 파악에 사용하세요. "
+                "days 파라미터로 조회 기간을 조정할 수 있습니다 (기본 60거래일)."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ticker": {"type": "string", "description": "6자리 종목코드"},
+                    "days":   {"type": "integer", "description": "조회할 거래일 수 (기본 20, 최대 60)"},
+                },
+                "required": ["ticker"],
+            },
+        ),
+        FunctionDeclaration(
             name="sell_stock",
             description="보유 종목을 시장가로 매도합니다.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "ticker":   {"type": "string",  "description": "6자리 종목코드"},
-                    "quantity": {"type": "integer", "description": "매도 수량 (주)"},
-                    "reason":   {"type": "string",  "description": "매도 근거"},
+                    "ticker":      {"type": "string",  "description": "6자리 종목코드"},
+                    "quantity":    {"type": "integer", "description": "매도 수량 (주)"},
+                    "reason":      {"type": "string",  "description": "매도 근거 (TP/SL/VWAP음수/강제청산 중 명시)"},
+                    "vwap_dev":    {"type": "number",  "description": "매도 시점 VWAP 이탈률 (%) — get_heikin_ashi_candles의 vwap_deviation_pct"},
+                    "ha_pattern":  {"type": "string",  "description": "매도 시점 HA 패턴"},
                 },
                 "required": ["ticker", "quantity", "reason"],
             },
@@ -140,6 +219,15 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             _validate_ticker(tool_input["ticker"])
             result = broker.get_minute_candles(tool_input["ticker"])
 
+        elif tool_name == "get_financial_summary":
+            _validate_ticker(tool_input["ticker"])
+            result = broker.get_financial_summary(tool_input["ticker"])
+
+        elif tool_name == "get_daily_price_chart":
+            _validate_ticker(tool_input["ticker"])
+            days = min(int(tool_input.get("days", 20)), 60)
+            result = broker.get_daily_candles(tool_input["ticker"], days)
+
         elif tool_name == "get_portfolio":
             if _is_dry_run():
                 global _sim_portfolio
@@ -155,13 +243,51 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             _validate_ticker(ticker)
             qty = int(tool_input["quantity"])
             reason = tool_input.get("reason", "")
+            vwap_dev = tool_input.get("vwap_dev")
+            ha_pattern = tool_input.get("ha_pattern", "")
 
             if qty <= 0:
                 return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
 
+            if ticker in _stopped_out_today:
+                logger.info("당일 손절 블락 차단: %s", ticker)
+                return json.dumps({
+                    "success": False,
+                    "message": f"{ticker} 당일 손절 종목 — 재진입 금지 (반복 손실 방지)",
+                }, ensure_ascii=False)
+
+            # VWAP 이탈률 가드레일 (코드 레벨)
+            if vwap_dev is not None:
+                if vwap_dev < VWAP_MIN_ENTRY_PCT:
+                    logger.info("VWAP 이탈률 부족 차단: %s (%.2f%% < +%.1f%%)", ticker, vwap_dev, VWAP_MIN_ENTRY_PCT)
+                    return json.dumps({
+                        "success": False,
+                        "message": (f"{ticker} VWAP 이탈률 {vwap_dev:+.2f}% — "
+                                    f"최소 +{VWAP_MIN_ENTRY_PCT:.1f}% 미만 진입 금지 (모멘텀 부족)"),
+                    }, ensure_ascii=False)
+                if vwap_dev > VWAP_MAX_ENTRY_PCT:
+                    logger.info("VWAP 과추격 차단: %s (%.2f%% > +%.1f%%)", ticker, vwap_dev, VWAP_MAX_ENTRY_PCT)
+                    return json.dumps({
+                        "success": False,
+                        "message": (f"{ticker} VWAP 이탈률 {vwap_dev:+.2f}% — "
+                                    f"+{VWAP_MAX_ENTRY_PCT:.1f}% 초과 진입 금지 (고점 추격)"),
+                    }, ensure_ascii=False)
+            else:
+                logger.warning("buy_stock: vwap_dev 미제공 — VWAP 가드레일 미적용 (%s)", ticker)
+
+            # 종목당 일일 최대 매수 횟수 체크
+            buy_count = _daily_buy_count.get(ticker, 0)
+            if buy_count >= MAX_DAILY_BUY_PER_TICKER:
+                logger.info("일일 매수 한도 초과 차단: %s (%d/%d회)", ticker, buy_count, MAX_DAILY_BUY_PER_TICKER)
+                return json.dumps({
+                    "success": False,
+                    "message": (f"{ticker} 당일 {buy_count}회 매수 완료 — "
+                                f"최대 {MAX_DAILY_BUY_PER_TICKER}회 초과 금지"),
+                }, ensure_ascii=False)
+
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
-            stock_name = price_info.get("name", ticker)
+            stock_name = price_info.get("name", "") or ticker
             total_cost = current_price * qty
 
             if _is_dry_run():
@@ -206,7 +332,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                             "total_cost": total_cost,
                             "dry_run": True,
                         }
-                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
+                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
                 else:
                     result = {
                         "success": True,
@@ -216,19 +342,26 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                         "total_cost": total_cost,
                         "dry_run": True,
                     }
-                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
+                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
             else:
                 result = broker.buy_order(ticker, qty)
                 result["reason"] = reason
                 result["total_cost"] = total_cost
                 if result["success"]:
-                    log_trade("BUY", ticker, qty, current_price, reason, True, stock_name)
+                    log_trade("BUY", ticker, qty, current_price, reason, True, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
+
+            # 성공 시 일일 매수 횟수 업데이트
+            if (result or {}).get("success"):
+                _daily_buy_count[ticker] = _daily_buy_count.get(ticker, 0) + 1
+                logger.info("일일 매수 횟수: %s → %d/%d회", ticker, _daily_buy_count[ticker], MAX_DAILY_BUY_PER_TICKER)
 
         elif tool_name == "sell_stock":
             ticker = tool_input["ticker"]
             _validate_ticker(ticker)
             qty = int(tool_input["quantity"])
             reason = tool_input.get("reason", "")
+            vwap_dev = tool_input.get("vwap_dev")
+            ha_pattern = tool_input.get("ha_pattern", "")
 
             if qty <= 0:
                 return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
@@ -250,7 +383,9 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
 
             price_info = broker.get_current_price(ticker)
             current_price = price_info["current_price"]
-            stock_name = price_info.get("name", ticker)
+            stock_name = price_info.get("name", "") or holding.get("name", "") or ticker
+            avg_price = holding.get("avg_price", 0)
+            realized_profit = int((current_price - avg_price) * qty) if avg_price > 0 else 0
 
             if _is_dry_run():
                 if _sim_portfolio is not None:
@@ -275,12 +410,17 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "reason": reason,
                     "dry_run": True,
                 }
-                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name)
+                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, realized_profit, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
             else:
                 result = broker.sell_order(ticker, qty)
                 result["reason"] = reason
                 if result["success"]:
-                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name)
+                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name, realized_profit, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
+
+            # 손절 매도 시 당일 재진입 블락 등록 (dry-run / 실거래 공통)
+            if _is_stoploss_reason(reason) and (result or {}).get("success"):
+                _stopped_out_today.add(ticker)
+                logger.info("당일 손절 블락 등록: %s", ticker)
 
         else:
             result = {"error": f"알 수 없는 tool: {tool_name}"}

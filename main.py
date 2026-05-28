@@ -4,9 +4,11 @@ gayastock - 거래량 모멘텀 + VWAP 국내 주식 트레이딩 에이전트
       python main.py --dry-run     # 시뮬레이션 모드
 """
 import argparse
+import json
 import logging
 import os
 import time
+from datetime import timedelta
 from data.utils import get_now_kst
 
 logging.Formatter.converter = lambda *args: get_now_kst().timetuple()
@@ -24,18 +26,41 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+_PROGRESS_BLOB = "session_progress.json"
+_PROGRESS_FILE = os.path.join(_log_dir, "session_progress.json")
+
+
+def _write_progress(data: dict):
+    """루프 진행상황을 GCS/로컬에 기록 (대시보드 실시간 표시용)."""
+    try:
+        with open(_PROGRESS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except Exception:
+        pass
+    bucket = os.environ.get("GCS_DATA_BUCKET", "")
+    if bucket:
+        try:
+            from google.cloud import storage
+            storage.Client().bucket(bucket).blob(_PROGRESS_BLOB).upload_from_string(
+                json.dumps(data, ensure_ascii=False), content_type="application/json"
+            )
+        except Exception:
+            pass
+
 
 def is_trading_day() -> bool:
     import holidays
     today = get_now_kst().date()
     if today.weekday() >= 5:
         return False
-    kr_holidays = holidays.Korea(years=today.year)
+    kr_holidays = holidays.SouthKorea(years=today.year)
     return today not in kr_holidays
 
 
-def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float, max_positions: int) -> bool:
-    """Python 사전 체크: TP/SL 조건 또는 빈 슬롯 여부. True면 Gemini 호출 필요."""
+def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
+                        max_positions: int) -> tuple[bool, list[dict]]:
+    """Python 사전 체크. (needs_action, ha_signals) 반환."""
+    ha_signals = []
     portfolio = broker.get_balance()
     holdings = portfolio.get("holdings", [])
 
@@ -43,29 +68,55 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float, ma
         rate = h.get("profit_loss_rate", 0)
         if rate >= take_profit_pct or rate <= -stop_loss_pct:
             logger.info("TP/SL 조건 해당: %s %.2f%% → Gemini 호출", h.get("ticker"), rate)
-            return True
+            return True, ha_signals
 
     if len(holdings) < max_positions:
         logger.info("빈 슬롯 있음 (%d/%d) → Gemini 호출", len(holdings), max_positions)
-        return True
+        return True, ha_signals
 
-    logger.info("포지션 풀, TP/SL 없음 → Gemini 스킵")
-    return False
+    # 포지션 풀 — 보유 종목 HA/VWAP 이탈 체크 (매도 신호 감지)
+    for h in holdings:
+        ticker = h.get("ticker", "")
+        if not ticker:
+            continue
+        try:
+            result = broker.get_minute_candles(ticker)
+            candles = result.get("candles", [])
+            vwap_dev = result.get("vwap_deviation_pct", 0)
+            if not candles:
+                continue
+            latest = candles[-1]
+            signal = {
+                "ticker": ticker,
+                "name": result.get("name", ""),
+                "pattern": latest.get("pattern", ""),
+                "vwap_dev": round(float(vwap_dev), 2),
+                "bullish": latest.get("bullish", True),
+            }
+            ha_signals.append(signal)
+            if vwap_dev < 0:
+                logger.info("VWAP 이탈: %s vwap=%.2f%% → Gemini 호출", ticker, vwap_dev)
+                return True, ha_signals
+        except Exception as e:
+            logger.warning("HA/VWAP 체크 실패 %s: %s", ticker, e)
+
+    logger.info("포지션 풀, TP/SL 없음, HA/VWAP 정상 → Gemini 스킵")
+    return False, ha_signals
 
 
 def run_trading():
-    if not is_trading_day():
+    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
+    if not dry_run and not is_trading_day() and os.environ.get("FORCE_RUN") != "true":
         logger.info("오늘은 휴장일(공휴일/주말)입니다. 건너뜁니다.")
         return
 
     from agent.trader import TradingAgent
     from agent.tools import _broker
+    from data.trade_log import log_agent_run
     from config import (
         TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
         INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
     )
-
-    dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     agent = TradingAgent()
     broker = _broker()
 
@@ -81,47 +132,117 @@ def run_trading():
     if dry_run:
         from agent.trader import _SCHEDULE_SLOTS
         from datetime import datetime as _dt, time as _dtime
+        import holidays as _hol
         now_kst = get_now_kst()
         market_open = _dtime(9, 0)
         market_close = _dtime(15, 30)
-        in_market = market_open <= now_kst.time() <= market_close
+        kr_hol = _hol.SouthKorea(years=now_kst.year)
+        in_market = (
+            now_kst.weekday() < 5
+            and now_kst.date() not in kr_hol
+            and market_open <= now_kst.time() <= market_close
+        )
         if not in_market:
+            # 장외/휴장일 → 가장 최근 거래일 09:20으로 시뮬
             first_slot = _SCHEDULE_SLOTS[0][0]
-            sim_dt = _dt(now_kst.year, now_kst.month, now_kst.day,
+            check = now_kst.date()
+            for _ in range(7):
+                if check.weekday() < 5 and check not in kr_hol:
+                    break
+                check -= timedelta(days=1)
+            sim_dt = _dt(check.year, check.month, check.day,
                          first_slot.hour, first_slot.minute,
                          tzinfo=now_kst.tzinfo)
-            logger.info("DRY-RUN 장외: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%H:%M"))
+            logger.info("DRY-RUN 장외: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%Y-%m-%d %H:%M"))
         else:
             logger.info("DRY-RUN 장중: 실제 시각 기준 회차 사용 (%s)", now_kst.strftime("%H:%M"))
 
+    session_id = get_now_kst().strftime("%Y%m%d_%H%M%S")
+    progress: dict = {
+        "session_id": session_id,
+        "source": "scheduled",
+        "mode": "dry_run" if dry_run else "live",
+        "status": "running",
+        "started_at": get_now_kst().isoformat(),
+        "total_loops": INNER_LOOP_COUNT,
+        "current_loop": 0,
+        "loops": [],
+    }
+    _write_progress(progress)
+
+    session_log: list[dict] = []
+    all_buy_tickers: list[str] = []
+
     for i in range(INNER_LOOP_COUNT):
         logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
+        loop_entry: dict = {"loop": i + 1, "ha_signals": [], "result": None}
+        loop_p: dict = {"loop": i + 1, "status": "checking", "ha_signals": [], "needs_action": False}
+        progress["current_loop"] = i + 1
+        progress["loops"].append(loop_p)
+        _write_progress(progress)
 
-        # dry-run은 sim 포트폴리오를 agent가 관리하므로 항상 호출
         if dry_run:
             needs_action = True
         else:
             try:
-                needs_action = _check_needs_action(broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS)
+                needs_action, ha_signals = _check_needs_action(
+                    broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
+                )
+                loop_entry["ha_signals"] = ha_signals
+                loop_p["ha_signals"] = ha_signals
             except Exception as e:
                 logger.warning("사전 체크 오류 (Gemini 폴백): %s", e)
                 needs_action = True
 
+        loop_p["needs_action"] = needs_action
         if needs_action:
-            # skip_log=False: 루프마다 즉시 기록 (Job이 중간에 kill 되어도 보존)
-            result = agent.run(cancel_pending=(i == 0), skip_log=False, sim_datetime=sim_dt)
+            loop_p["status"] = "llm_running"
+            _write_progress(progress)
+            result = agent.run(
+                cancel_pending=(i == 0),
+                skip_log=True,
+                sim_datetime=sim_dt,
+            )
+            loop_entry["result"] = result
+            loop_p["result_preview"] = (result or "")[:300]
+            all_buy_tickers.extend(agent.buy_tickers)
             logger.info("에이전트 결과:\n%s", result)
-            if i == 0:
-                print("\n" + "=" * 60)
-                if dry_run:
-                    print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
-                print(result)
-                print("=" * 60)
+
+        loop_p["status"] = "done"
+        _write_progress(progress)
+        session_log.append(loop_entry)
 
         if i < INNER_LOOP_COUNT - 1:
             logger.info("%d초 대기 중...", INNER_LOOP_SLEEP_SEC)
             time.sleep(INNER_LOOP_SLEEP_SEC)
 
+    # 세션 최종 요약 — LLM 1회 호출로 전체 정리
+    progress["status"] = "summarizing"
+    _write_progress(progress)
+    logger.info("=" * 60)
+    logger.info("세션 최종 요약 생성 중...")
+    final_summary = agent.summarize_session(session_log)
+    logger.info("최종 요약:\n%s", final_summary)
+    try:
+        portfolio_snapshot = broker.get_balance()
+    except Exception:
+        portfolio_snapshot = {}
+    log_agent_run(
+        watchlist=None,
+        summary=final_summary,
+        portfolio_snapshot=portfolio_snapshot,
+        buy_tickers=list(dict.fromkeys(all_buy_tickers)),
+        loops=session_log,
+    )
+    progress["status"] = "done"
+    progress["finished_at"] = get_now_kst().isoformat()
+    _write_progress(progress)
+
+    print("\n" + "=" * 60)
+    if dry_run:
+        print("⚠️  DRY-RUN 모드: 실제 주문이 실행되지 않았습니다.")
+    print(final_summary)
+    print("=" * 60)
     logger.info("=" * 60)
 
 
@@ -129,11 +250,16 @@ def main():
     parser = argparse.ArgumentParser(description="gayastock 트레이딩 에이전트")
     parser.add_argument("--once", action="store_true", help="1회 즉시 실행 후 종료")
     parser.add_argument("--dry-run", action="store_true", help="시뮬레이션 모드 (실제 주문 없음)")
+    parser.add_argument("--force", action="store_true", help="휴장일 체크 무시 (테스트용)")
+    parser.add_argument("--tickers", nargs="+", help="분석할 종목 코드 지정 (예: 005930 000660)")
     args = parser.parse_args()
 
     if args.dry_run:
         os.environ["DRY_RUN"] = "true"
         logger.info("DRY-RUN 모드 활성화 — 실제 주문이 실행되지 않습니다.")
+
+    if args.force:
+        os.environ["FORCE_RUN"] = "true"
 
     if args.once:
         run_trading()

@@ -27,6 +27,11 @@ INITIAL_CAPITAL = int(os.getenv("INITIAL_CAPITAL") or "0")  # 계좌 이체 원�
 TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "4.0"))
 STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "2.5"))
 
+# 진입 VWAP 이탈률 가드레일 (코드 레벨 강제)
+VWAP_MIN_ENTRY_PCT = float(os.getenv("VWAP_MIN_ENTRY_PCT", "0.5"))   # 미만 진입 금지 (모멘텀 부족)
+VWAP_MAX_ENTRY_PCT = float(os.getenv("VWAP_MAX_ENTRY_PCT", "3.0"))   # 초과 진입 금지 (고점 추격)
+MAX_DAILY_BUY_PER_TICKER = int(os.getenv("MAX_DAILY_BUY_PER_TICKER", "2"))  # 종목당 하루 최대 매수 횟수
+
 # 내부 루프 설정 (스케줄러 1회 호출당 반복 횟수 / 슬립)
 # Cloud Scheduler가 이미 11분마다 실행하므로 기본값 1 — 내부 반복 불필요
 INNER_LOOP_COUNT = int(os.getenv("INNER_LOOP_COUNT", "1"))

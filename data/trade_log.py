@@ -2,6 +2,8 @@
 import json
 import logging
 import os
+import threading
+import time
 from datetime import datetime
 from data.utils import get_now_kst
 
@@ -17,33 +19,97 @@ _TRADE_BLOB = "logs/trades.jsonl"
 _AGENT_BLOB = "logs/agent_runs.jsonl"
 
 
+# ── 날짜 기반 트리밍 ─────────────────────
+
+def _trim_to_latest_day(existing: list[str], new_line: str) -> list[str]:
+    """새 레코드가 기존 최신 날짜보다 미래면 이전 로그 전체 삭제 (장 오픈일 단위 보존)."""
+    if not existing:
+        return [new_line]
+    try:
+        new_date = json.loads(new_line).get("ts", "")[:10]
+    except Exception:
+        return existing + [new_line]
+    if not new_date:
+        return existing + [new_line]
+    # 기존 레코드 중 최신 날짜를 역순 탐색으로 빠르게 찾기
+    latest_existing = None
+    for line in reversed(existing):
+        if not line.strip():
+            continue
+        try:
+            ts = json.loads(line).get("ts", "")[:10]
+            if ts:
+                latest_existing = ts
+                break
+        except Exception:
+            break
+    if latest_existing and new_date > latest_existing:
+        logger.info("새 거래일 감지 (%s → %s) — 이전 로그 삭제", latest_existing, new_date)
+        return [new_line]
+    return existing + [new_line]
+
+
 # ── GCS 헬퍼 ────────────────────────────
+
+_gcs_lock = threading.Lock()  # 프로세스 내 동시 쓰기 직렬화
+
 
 def _gcs_read_lines(blob_name: str) -> list[str]:
     try:
         from google.cloud import storage
         blob = storage.Client().bucket(_GCS_BUCKET).blob(blob_name)
-        if not blob.exists():
-            return []
         return blob.download_as_text(encoding="utf-8").splitlines()
     except Exception as e:
-        logger.debug("GCS 읽기 실패 (%s): %s", blob_name, e)
+        if "404" in str(e) or "NotFound" in type(e).__name__:
+            return []
+        logger.warning("GCS 읽기 실패 (%s): %s", blob_name, e)
         return []
 
 
-def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) -> bool:
+def _gcs_append_line(blob_name: str, line: str) -> bool:
+    """generation match + 재시도로 동시 쓰기 충돌 방지."""
     try:
         from google.cloud import storage
-        bucket = storage.Client().bucket(_GCS_BUCKET)
-        blob = bucket.blob(blob_name)
-        existing = blob.download_as_text(encoding="utf-8") if blob.exists() else ""
-        lines = [l for l in existing.splitlines() if l.strip()]
-        lines.append(line)
-        if max_records:
-            lines = lines[-max_records:]
-        blob.upload_from_string("\n".join(lines) + "\n",
-                                content_type="text/plain; charset=utf-8")
-        return True
+        from google.api_core.exceptions import PreconditionFailed
+
+        with _gcs_lock:
+            for attempt in range(5):
+                try:
+                    bucket = storage.Client().bucket(_GCS_BUCKET)
+                    blob = bucket.blob(blob_name)
+                    try:
+                        blob.reload()
+                        generation = blob.generation
+                        existing = blob.download_as_text(encoding="utf-8")
+                    except Exception as _e:
+                        if "404" in str(_e) or "NotFound" in type(_e).__name__:
+                            generation = 0
+                            existing = ""
+                        else:
+                            raise
+
+                    existing_lines = [l for l in existing.splitlines() if l.strip()]
+                    lines = _trim_to_latest_day(existing_lines, line)
+
+                    blob.upload_from_string(
+                        "\n".join(lines) + "\n",
+                        content_type="text/plain; charset=utf-8",
+                        if_generation_match=generation,
+                    )
+                    try:
+                        blob.make_public()
+                    except Exception:
+                        pass  # Uniform Bucket-Level Access 사용 시 IAM으로 처리
+                    return True
+
+                except PreconditionFailed:
+                    # 다른 프로세스가 먼저 썼으면 재시도
+                    if attempt < 4:
+                        time.sleep(0.2 * (2 ** attempt))  # 0.2 → 0.4 → 0.8 → 1.6초
+
+            logger.warning("GCS 동시 쓰기 충돌 — 재시도 5회 초과: %s", blob_name)
+            return False
+
     except Exception as e:
         logger.warning("GCS 쓰기 실패 (%s): %s", blob_name, e)
         return False
@@ -51,17 +117,12 @@ def _gcs_append_line(blob_name: str, line: str, max_records: int | None = None) 
 
 # ── 로칼 파일 헬퍼 ────────────────────
 
-def _local_append(filepath: str, line: str, max_records: int | None = None):
+def _local_append(filepath: str, line: str):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    if max_records:
-        lines = _local_read_lines(filepath)
-        lines.append(line)
-        lines = lines[-max_records:]
-        with open(filepath, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-    else:
-        with open(filepath, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+    existing = [l for l in _local_read_lines(filepath) if l.strip()]
+    lines = _trim_to_latest_day(existing, line)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
 
 
 def _local_read_lines(filepath: str) -> list[str]:
@@ -73,13 +134,13 @@ def _local_read_lines(filepath: str) -> list[str]:
 
 # ── 공통 ─────────────────────────
 
-def _append(blob_name: str, filepath: str, record: dict, max_records: int | None = None):
+def _append(blob_name: str, filepath: str, record: dict):
     line = json.dumps(record, ensure_ascii=False)
     if _GCS_BUCKET:
-        if _gcs_append_line(blob_name, line, max_records):
+        if _gcs_append_line(blob_name, line):
             return
         logger.warning("GCS 쓰기 실패 — 로컬 파일 fallback: %s", filepath)
-    _local_append(filepath, line, max_records)
+    _local_append(filepath, line)
 
 
 def _read_all(blob_name: str, filepath: str) -> list[dict]:
@@ -97,12 +158,10 @@ def _read_all(blob_name: str, filepath: str) -> list[dict]:
 
 # ── 공개 API ───────────────────────
 
-_MAX_TRADE_RECORDS = 1000    # 매매 로그 최대 보존 건수
-_MAX_AGENT_RECORDS = 500     # 에이전트 실행 로그 최대 보존 건수 (20회/일 × 25일)
 
-
-def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool, name: str = ""):
-    _append(_TRADE_BLOB, TRADE_LOG_FILE, {
+def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool,
+              name: str = "", profit: int = 0, vwap_dev: float | None = None, ha_pattern: str = ""):
+    record: dict = {
         "ts": get_now_kst().isoformat(),
         "action": action,
         "ticker": ticker,
@@ -112,17 +171,42 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
         "amount": price * quantity,
         "reason": reason,
         "success": success,
-    }, max_records=_MAX_TRADE_RECORDS)
+    }
+    if vwap_dev is not None:
+        record["vwap_dev"] = round(float(vwap_dev), 2)
+    if ha_pattern:
+        record["ha_pattern"] = ha_pattern
+    if action == "SELL":
+        record["profit"] = profit
+    _append(_TRADE_BLOB, TRADE_LOG_FILE, record)
 
 
-def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict, buy_tickers: list = None):
+def log_cancel(ticker: str, quantity: int, price: int, order_no: str, name: str = ""):
+    """미체결 주문 취소 기록 — BUY 접수 후 미체결 취소 시 trade_log 정합성 유지용."""
+    _append(_TRADE_BLOB, TRADE_LOG_FILE, {
+        "ts": get_now_kst().isoformat(),
+        "action": "CANCEL",
+        "ticker": ticker,
+        "name": name,
+        "quantity": quantity,
+        "price": price,
+        "amount": price * quantity,
+        "order_no": order_no,
+        "reason": "미체결 주문 취소",
+        "success": True,
+    })
+
+
+def log_agent_run(watchlist: list[str], summary: str, portfolio_snapshot: dict,
+                  buy_tickers: list = None, loops: list = None):
     _append(_AGENT_BLOB, AGENT_LOG_FILE, {
         "ts": get_now_kst().isoformat(),
         "watchlist": watchlist,
         "summary": summary,
         "portfolio": portfolio_snapshot,
         "buy_tickers": buy_tickers or [],
-    }, max_records=_MAX_AGENT_RECORDS)
+        "loops": loops or [],
+    })
 
 
 def get_trades(limit: int = 200) -> list[dict]:

@@ -15,32 +15,46 @@ logger = logging.getLogger(__name__)
 
 TOKEN_CACHE_FILE = ".kis_token_cache.json"
 TOKEN_CACHE_BLOB = "kis_token_cache.json"
-# GCS_TOKEN_BUCKET 우선, 없으면 GCS_DATA_BUCKET 공유 (Cloud Run 환경)
-_GCS_BUCKET = os.environ.get("GCS_TOKEN_BUCKET") or os.environ.get("GCS_DATA_BUCKET", "")
+
+
+def _token_gcs_bucket() -> str:
+    # 모듈 로드 시점이 아닌 호출 시점에 읽어 Cloud Run 환경변수 지연 세팅 대응
+    return (os.environ.get("GCS_TOKEN_BUCKET") or os.environ.get("GCS_DATA_BUCKET", "")).strip()
 
 
 def _gcs_read_token() -> dict | None:
-    if not _GCS_BUCKET:
+    bucket = _token_gcs_bucket()
+    if not bucket:
+        logger.warning("GCS 토큰 캐시: GCS_DATA_BUCKET 미설정 — 매 실행마다 토큰 재발급됨")
         return None
     try:
         from google.cloud import storage
-        blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
-        if blob.exists():
-            return json.loads(blob.download_as_text())
+        blob = storage.Client().bucket(bucket).blob(TOKEN_CACHE_BLOB)
+        text = blob.download_as_text()
+        logger.info("GCS 토큰 캐시 읽기 성공 (bucket=%s)", bucket)
+        return json.loads(text)
     except Exception as e:
-        logger.debug("GCS 토큰 읽기 실패: %s", e)
+        if "404" in str(e) or "NotFound" in type(e).__name__:
+            logger.info("GCS 토큰 캐시 없음 (첫 실행) — 신규 토큰 발급")
+            return None
+        logger.warning("GCS 토큰 읽기 실패 (%s): %s", type(e).__name__, e)
     return None
 
 
 def _gcs_write_token(data: dict):
-    if not _GCS_BUCKET:
+    bucket = _token_gcs_bucket()
+    if not bucket:
         return
     try:
         from google.cloud import storage
-        blob = storage.Client().bucket(_GCS_BUCKET).blob(TOKEN_CACHE_BLOB)
+        blob = storage.Client().bucket(bucket).blob(TOKEN_CACHE_BLOB)
         blob.upload_from_string(json.dumps(data), content_type="application/json")
+        logger.info("GCS 토큰 캐시 저장 완료 (bucket=%s)", bucket)
     except Exception as e:
-        logger.debug("GCS 토큰 저장 실패: %s", e)
+        logger.warning("GCS 토큰 저장 실패 (%s): %s", type(e).__name__, e)
+
+
+_KIS_TOKEN_ERROR_CODES = frozenset({"EGW00121", "EGW00123", "EGW00124"})
 
 
 class KISBroker:
@@ -75,11 +89,20 @@ class KISBroker:
             return
         try:
             expires_at = datetime.fromisoformat(data["expires_at"])
-            if get_now_kst() < expires_at:
+            # fromisoformat이 naive datetime 반환하면 KST로 보정
+            from data.utils import KST
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=KST)
+            now = get_now_kst()
+            if now < expires_at:
                 self._access_token = data["access_token"]
                 self._token_expires_at = expires_at
-        except Exception:
-            pass
+                remaining = int((expires_at - now).total_seconds() / 60)
+                logger.info("KIS 토큰 캐시 재사용 (만료: %s, 잔여 %d분)", expires_at.strftime("%H:%M"), remaining)
+            else:
+                logger.info("KIS 토큰 캐시 만료됨 (만료: %s) — 신규 발급", expires_at.strftime("%H:%M"))
+        except Exception as e:
+            logger.warning("KIS 토큰 캐시 파싱 실패 (%s): %s — 신규 발급", type(e).__name__, e)
 
     def _save_token_cache(self, token: str, expires_at: datetime):
         data = {"access_token": token, "expires_at": expires_at.isoformat()}
@@ -108,7 +131,14 @@ class KISBroker:
         if "access_token" not in data:
             raise ValueError(f"KIS 토큰 발급 실패: {data.get('msg1', data.get('msg', str(data)))}")
         self._access_token = data["access_token"]
-        self._token_expires_at = get_now_kst() + timedelta(hours=23)
+        # KIS API가 실제 만료 시각을 반환하면 사용, 없으면 23시간 후
+        raw_exp = data.get("access_token_token_expired", "")
+        try:
+            from data.utils import KST
+            self._token_expires_at = datetime.strptime(raw_exp, "%Y-%m-%d %H:%M:%S").replace(tzinfo=KST)
+        except Exception:
+            self._token_expires_at = get_now_kst() + timedelta(hours=23)
+        logger.info("KIS 신규 토큰 발급 완료 (만료: %s)", self._token_expires_at.strftime("%Y-%m-%d %H:%M"))
         self._save_token_cache(self._access_token, self._token_expires_at)
         return self._access_token
 
@@ -131,6 +161,30 @@ class KISBroker:
         """초당 API 호출 제한 방지 (공식 패턴 참고)"""
         time.sleep(0.05)
 
+    def _api_call(self, method: str, url: str, tr_id: str, **kwargs) -> requests.Response:
+        """KIS API 단일 호출 포인트 — 토큰 오류 감지 시 1회 재발급 후 재시도"""
+        for attempt in range(2):
+            res = requests.request(method, url, headers=self._headers(tr_id), **kwargs)
+            if attempt == 0:
+                need_reissue = res.status_code == 401
+                msg_cd = ""
+                if not need_reissue:
+                    try:
+                        body = res.json()
+                        msg_cd = body.get("msg_cd", "")
+                        if body.get("rt_cd") == "1" and msg_cd in _KIS_TOKEN_ERROR_CODES:
+                            need_reissue = True
+                    except Exception:
+                        pass
+                if need_reissue:
+                    logger.warning("KIS 토큰 오류 감지 (status=%d, msg_cd=%s) — 강제 재발급 후 재시도",
+                                   res.status_code, msg_cd)
+                    self._access_token = None
+                    self._token_expires_at = None
+                    continue
+            return res
+        return res
+
     # ── 시세 조회 ──────────────────────────────────────────
 
     def get_top_volume_stocks(self, n: int = 20) -> list[dict]:
@@ -144,13 +198,13 @@ class KISBroker:
             "FID_BLNG_CLS_CODE": "0",
             "FID_TRGT_CLS_CODE": "111111111",
             "FID_TRGT_EXLS_CLS_CODE": "111111",  # 거래정지/관리/우선주/투자유의/ETF/스팩 제외
-            "FID_INPUT_PRICE_1": "",
+            "FID_INPUT_PRICE_1": "1000",
             "FID_INPUT_PRICE_2": "",
             "FID_VOL_CNT": "",
             "FID_INPUT_DATE_1": "",
         }
         # 충분히 많이 가져와서 필터 후 n개 확보
-        res = requests.get(url, headers=self._headers("FHPST01710000"), params=params, timeout=10)
+        res = self._api_call("GET", url, "FHPST01710000", params=params, timeout=10)
         res.raise_for_status()
         output = res.json().get("output", [])
         self._smart_sleep()
@@ -159,6 +213,8 @@ class KISBroker:
             ticker = item.get("mksc_shrn_iscd", "")
             name = item.get("hts_kor_isnm", "")
             if not ticker or _is_fund(name):
+                continue
+            if _to_int(item.get("stck_prpr")) < 1000:
                 continue
             result.append({
                 "ticker": ticker,
@@ -178,7 +234,7 @@ class KISBroker:
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD": ticker,
         }
-        res = requests.get(url, headers=self._headers("FHKST01010100"), params=params, timeout=10)
+        res = self._api_call("GET", url, "FHKST01010100", params=params, timeout=10)
         res.raise_for_status()
         output = res.json().get("output", {})
         self._smart_sleep()
@@ -187,6 +243,7 @@ class KISBroker:
             raise ValueError(f"{ticker} 현재가 조회 실패 (거래정지 또는 API 오류)")
         return {
             "ticker": ticker,
+            "name": output.get("hts_kor_isnm", ""),
             "current_price": current_price,
             "open_price": int(output.get("stck_oprc", 0) or 0),
             "high_price": int(output.get("stck_hgpr", 0) or 0),
@@ -205,7 +262,7 @@ class KISBroker:
         """재무 API 호출 — 500 에러 시 1회 재시도"""
         for attempt in range(2):
             try:
-                res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+                res = self._api_call("GET", url, tr_id, params=params, timeout=10)
                 if res.status_code == 500 and attempt == 0:
                     logger.warning("재무 API 500 에러, 1초 후 재시도 (%s)", url)
                     time.sleep(1)
@@ -292,6 +349,91 @@ class KISBroker:
             })
         return result
 
+    def get_daily_candles(self, ticker: str, days: int = 20) -> list[dict]:
+        """일봉 조회 (TR: FHKST03010100) — 최근 N거래일 OHLCV + 등락률"""
+        from datetime import date
+        end = get_now_kst().strftime("%Y%m%d")
+        # 충분한 날짜 범위 확보 (영업일 기준 days개를 확보하려면 달력일 기준으로 더 넓게)
+        start = (get_now_kst() - timedelta(days=days * 2)).strftime("%Y%m%d")
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": ticker,
+            "FID_INPUT_DATE_1": start,
+            "FID_INPUT_DATE_2": end,
+            "FID_PERIOD_DIV_CODE": "D",
+            "FID_ORG_ADJ_PRC": "0",
+        }
+        res = self._api_call("GET", url, "FHKST03010100", params=params, timeout=10)
+        res.raise_for_status()
+        output = res.json().get("output2", [])
+        self._smart_sleep()
+
+        result = []
+        for r in reversed(output):  # API는 최신순, 오래된 순으로 뒤집기
+            close = _to_int(r.get("stck_clpr"))
+            if close == 0:
+                continue
+            result.append({
+                "date": r.get("stck_bsop_date", ""),
+                "open": _to_int(r.get("stck_oprc")),
+                "high": _to_int(r.get("stck_hgpr")),
+                "low": _to_int(r.get("stck_lwpr")),
+                "close": close,
+                "volume": _to_int(r.get("acml_vol")),
+                "change_rate": _to_float(r.get("prdy_ctrt")),
+            })
+        return result[-days:]  # 최근 days개만 반환
+
+    def get_financial_summary(self, ticker: str) -> dict:
+        """재무 요약 — 손익계산서 + 재무비율 통합 반환 (LLM용 단일 호출)"""
+        try:
+            income = self.get_income_statement(ticker, annual=True)
+        except Exception as e:
+            logger.warning("손익계산서 조회 실패 (%s): %s", ticker, e)
+            income = []
+        try:
+            ratios = self.get_financial_ratio(ticker, annual=True)
+        except Exception as e:
+            logger.warning("재무비율 조회 실패 (%s): %s", ticker, e)
+            ratios = []
+        try:
+            balance = self.get_balance_sheet(ticker, annual=True)
+        except Exception as e:
+            logger.warning("대차대조표 조회 실패 (%s): %s", ticker, e)
+            balance = []
+
+        # 최근 연도 기준으로 병합 (period 키 기준)
+        merged: dict[str, dict] = {}
+        for row in income:
+            p = row["period"]
+            merged.setdefault(p, {})["period"] = p
+            merged[p].update({
+                "revenue": row["revenue"],
+                "operating_profit": row["operating_profit"],
+                "net_profit": row["net_profit"],
+                "operating_margin_pct": row["operating_margin_pct"],
+                "eps": row["eps"],
+            })
+        for row in ratios:
+            p = row["period"]
+            merged.setdefault(p, {})["period"] = p
+            merged[p].update({
+                "roe_pct": row["roe_pct"],
+                "per": row["per"],
+                "pbr": row["pbr"],
+            })
+        for row in balance:
+            p = row["period"]
+            merged.setdefault(p, {})["period"] = p
+            merged[p].update({
+                "debt_ratio_pct": row["debt_ratio_pct"],
+                "total_assets": row["total_assets"],
+            })
+
+        periods = sorted(merged.keys(), reverse=True)[:4]  # 최근 4개 연도
+        return {"ticker": ticker, "annual": [merged[p] for p in periods]}
+
     # ── 잔고 조회 ─────────────────────────────────────────
 
     def get_balance(self) -> dict:
@@ -311,7 +453,7 @@ class KISBroker:
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
         }
-        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res = self._api_call("GET", url, tr_id, params=params, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
@@ -373,8 +515,9 @@ class KISBroker:
             profit_loss = holdings_pl if holdings_pl != 0 else (total_eval - cash) - pchs_smtl
 
         return {
-            "cash": cash,
-            "total_eval": total_eval,
+            "cash": cash,             # dnca_tot_amt: 예수금 (주식 매수 가능한 현금)
+            "holdings_eval": scts_evlu,  # scts_evlu_amt: 보유 주식 평가금액
+            "total_eval": total_eval,    # tot_evlu_amt: KIS 총평가 (참고용)
             "profit_loss": profit_loss,
             "holdings": holdings,
         }
@@ -393,7 +536,7 @@ class KISBroker:
             "ORD_QTY": str(quantity),
             "ORD_UNPR": str(price),
         }
-        res = requests.post(url, headers=self._headers(tr_id), json=body, timeout=10)
+        res = self._api_call("POST", url, tr_id, json=body, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
@@ -415,7 +558,7 @@ class KISBroker:
             "ORD_QTY": str(quantity),
             "ORD_UNPR": str(price),
         }
-        res = requests.post(url, headers=self._headers(tr_id), json=body, timeout=10)
+        res = self._api_call("POST", url, tr_id, json=body, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
@@ -427,7 +570,7 @@ class KISBroker:
 
     # ── 분봉 / 하이킨아시 ────────────────────────────────────
 
-    def get_minute_candles(self, ticker: str, ha_candle_count: int = 30) -> dict:
+    def get_minute_candles(self, ticker: str, ha_candle_count: int = 60) -> dict:
         """1분봉 조회 후 VWAP 계산 + 3분봉 집계 + 하이킨아시 계산 반환 (TR: FHKST03010200)"""
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
         now = get_now_kst().strftime("%H%M%S")
@@ -438,7 +581,7 @@ class KISBroker:
             "FID_INPUT_HOUR_1": now,
             "FID_PW_DATA_INCU_YN": "Y",
         }
-        res = requests.get(url, headers=self._headers("FHKST03010200"), params=params, timeout=10)
+        res = self._api_call("GET", url, "FHKST03010200", params=params, timeout=10)
         res.raise_for_status()
         data_json = res.json()
         output = data_json.get("output2", [])
@@ -487,7 +630,7 @@ class KISBroker:
             "INQR_DVSN_1": "0",
             "INQR_DVSN_2": "0",
         }
-        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res = self._api_call("GET", url, tr_id, params=params, timeout=10)
         res.raise_for_status()
         output = res.json().get("output", [])
         self._smart_sleep()
@@ -527,7 +670,7 @@ class KISBroker:
             "ORD_UNPR": "0",
             "QTY_ALL_ORD_YN": "Y",
         }
-        res = requests.post(url, headers=self._headers(tr_id), json=body, timeout=10)
+        res = self._api_call("POST", url, tr_id, json=body, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
@@ -546,6 +689,9 @@ class KISBroker:
                 r = self.cancel_order(order["order_no"], order.get("krx_fwdg_ord_orgno", ""))
                 r["ticker"] = order["ticker"]
                 r["name"] = order["name"]
+                r["action"] = order["action"]
+                r["quantity"] = order["remaining_qty"]
+                r["price"] = order["order_price"]
                 results.append(r)
                 logger.info("주문 취소: %s %s → %s", order["ticker"], order["order_no"], r["message"])
             except Exception as e:
@@ -555,6 +701,9 @@ class KISBroker:
                     "order_no": order["order_no"],
                     "ticker": order["ticker"],
                     "name": order["name"],
+                    "action": order["action"],
+                    "quantity": order["remaining_qty"],
+                    "price": order["order_price"],
                     "message": str(e),
                 })
         return results
@@ -581,7 +730,7 @@ class KISBroker:
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
         }
-        res = requests.get(url, headers=self._headers(tr_id), params=params, timeout=10)
+        res = self._api_call("GET", url, tr_id, params=params, timeout=10)
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()

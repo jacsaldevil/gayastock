@@ -21,29 +21,29 @@ SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").format(
     STOP_LOSS_PCT=STOP_LOSS_PCT,
 )
 
-MAX_TOOL_ROUNDS = 30
+MAX_TOOL_ROUNDS = 50
 
 _SCHEDULE_SLOTS = [
-    (dtime(9, 20),  "【1회차 — 진입】장 시작 20분 경과. Google 검색 후 Top10 스캔, HA 신호 강한 종목 적극 매수."),
-    (dtime(9, 31),  "【2회차 — 오전 점검】TP/SL 먼저 확인. HA 강/중 진입 가능."),
-    (dtime(9, 42),  "【3회차 — 오전 점검】TP/SL 먼저 확인. HA 강/중 진입 가능."),
-    (dtime(9, 53),  "【4회차 — 오전 점검】TP/SL 먼저 확인. HA 강/중 진입 가능."),
-    (dtime(10, 4),  "【5회차 — 오전 점검】TP/SL 먼저 확인. HA 강/중 진입 가능."),
-    (dtime(10, 15), "【6회차 — 오전 점검】TP/SL 먼저 확인. HA 강/중 진입 가능."),
-    (dtime(10, 26), "【7회차 — 오전 점검】TP/SL 먼저 확인. HA 강/중 진입 가능."),
-    (dtime(10, 37), "【8회차 — 오전 점검】TP/SL 먼저 확인. HA 강/중 진입 가능."),
-    (dtime(10, 48), "【9회차 — 오전 후반 점검】TP/SL 확인. HA 강 우선, 중은 선택적 진입."),
-    (dtime(10, 59), "【10회차 — 오전 후반 점검】TP/SL 확인. HA 강 우선, 중은 선택적 진입."),
-    (dtime(11, 10), "【11회차 — 오전 후반 점검】TP/SL 확인. HA 강 우선, 중은 선택적 진입."),
-    (dtime(11, 21), "【12회차 — 오전 후반 점검】TP/SL 확인. HA 강 우선, 중은 선택적 진입."),
-    (dtime(11, 32), "【13회차 — 오전 후반 점검】TP/SL 확인. HA 강 우선, 중은 선택적 진입."),
-    (dtime(11, 43), "【14회차 — 오전 후반 점검】TP/SL 확인. HA 강 우선, 중은 선택적 진입."),
-    (dtime(11, 54), "【15회차 — 오전 후반 점검】TP/SL 확인. HA 강 우선, 중은 선택적 진입."),
-    (dtime(12, 5),  "【16회차 — 정리 점검】TP/SL 확인. HA 강(강한상승 1봉+)만 허용. 신규 진입 자제."),
-    (dtime(12, 16), "【17회차 — 정리 점검】TP/SL 확인. HA 강(강한상승 1봉+)만 허용. 신규 진입 자제."),
-    (dtime(12, 27), "【18회차 — 정리 점검】TP/SL 확인. HA 강(강한상승 1봉+)만 허용. 신규 진입 자제."),
-    (dtime(12, 38), "【19회차 — 청산 준비】TP/SL 확인. 신규 매수 금지. 수익 중인 종목도 청산 고려."),
-    (dtime(13, 0),  "【20회차 — 강제 청산】신규 매수 절대 금지. 보유 전종목 즉시 전량 매도."),
+    (dtime(9, 20),  "【1회차 — 진입】장 시작 20분 경과. Google 검색 후 Top10 스캔. VWAP +0.5%~+2.5%, HA 연속 양봉 확인 후 매수."),
+    (dtime(9, 27),  "【2회차 — 오전 점검】TP/SL 먼저 확인. VWAP +0.5%~+2.5% 구간, HA 추세 확인 후 진입."),
+    (dtime(9, 34),  "【3회차 — 오전 점검】TP/SL 먼저 확인. VWAP +0.5%~+2.5% 구간, HA 추세 확인 후 진입."),
+    (dtime(9, 41),  "【4회차 — 오전 점검】TP/SL 먼저 확인. VWAP +0.5%~+2.5% 구간, HA 추세 확인 후 진입."),
+    (dtime(9, 48),  "【5회차 — 오전 점검】TP/SL 먼저 확인. VWAP +0.5%~+2.5% 구간, HA 추세 확인 후 진입."),
+    (dtime(9, 55),  "【6회차 — 오전 점검】TP/SL 먼저 확인. VWAP +0.5%~+2.5% 구간, HA 추세 확인 후 진입."),
+    (dtime(10, 2),  "【7회차 — 오전 점검】TP/SL 먼저 확인. VWAP +0.5%~+2.5% 구간, HA 추세 확인 후 진입."),
+    (dtime(10, 9),  "【8회차 — 오전 점검】TP/SL 먼저 확인. VWAP +0.5%~+2.5% 구간, HA 추세 확인 후 진입."),
+    (dtime(10, 16), "【9회차 — 오전 후반 점검】TP/SL 확인. VWAP +1%~+2% 이내, HA 강한상승 확인 시만 진입."),
+    (dtime(10, 23), "【10회차 — 오전 후반 점검】TP/SL 확인. VWAP +1%~+2% 이내, HA 강한상승 확인 시만 진입."),
+    (dtime(10, 30), "【11회차 — 오전 후반 점검】TP/SL 확인. VWAP +1%~+2% 이내, HA 강한상승 확인 시만 진입."),
+    (dtime(10, 37), "【12회차 — 오전 후반 점검】TP/SL 확인. VWAP +1%~+2% 이내, HA 강한상승 확인 시만 진입."),
+    (dtime(10, 44), "【13회차 — 오전 후반 점검】TP/SL 확인. VWAP +1%~+2% 이내, HA 강한상승 확인 시만 진입."),
+    (dtime(10, 51), "【14회차 — 오전 후반 점검】TP/SL 확인. VWAP +1%~+2% 이내, HA 강한상승 확인 시만 진입."),
+    (dtime(10, 58), "【15회차 — 오전 후반 점검】TP/SL 확인. VWAP +1%~+2% 이내, HA 강한상승 확인 시만 진입."),
+    (dtime(11, 5),  "【16회차 — 정리 점검】TP/SL 확인. 신규 진입 금지. 기존 포지션 청산 위주."),
+    (dtime(11, 12), "【17회차 — 정리 점검】TP/SL 확인. 신규 진입 금지. 기존 포지션 청산 위주."),
+    (dtime(11, 19), "【18회차 — 정리 점검】TP/SL 확인. 신규 진입 금지. 기존 포지션 청산 위주."),
+    (dtime(11, 26), "【19회차 — 청산 준비】TP/SL 확인. 신규 매수 금지. 수익 중인 종목도 청산 고려."),
+    (dtime(11, 30), "【20회차 — 강제 청산】신규 매수 절대 금지. 보유 전종목 즉시 전량 매도."),
 ]
 
 
@@ -102,6 +102,9 @@ class TradingAgent:
         self.sim_portfolio_out: dict | None = None
         set_sim_portfolio(sim_portfolio_in)
 
+        from agent.tools import load_stopped_out_today
+        load_stopped_out_today()
+
         try:
             # 실전 모드 + 첫 루프에서만 미체결 주문 전량 취소
             if cancel_pending and os.environ.get("DRY_RUN", "false").lower() != "true":
@@ -110,6 +113,17 @@ class TradingAgent:
                     if cancelled:
                         logger.info("미체결 주문 %d건 취소: %s", len(cancelled),
                                     [(c["ticker"], c["order_no"], c["success"]) for c in cancelled])
+                        from data.trade_log import log_cancel
+                        for c in cancelled:
+                            if c.get("success") and c.get("action") == "BUY" and c.get("quantity", 0) > 0:
+                                log_cancel(
+                                    ticker=c["ticker"],
+                                    quantity=c["quantity"],
+                                    price=c.get("price", 0),
+                                    order_no=c["order_no"],
+                                    name=c.get("name", ""),
+                                )
+                                logger.info("미체결 BUY 취소 기록: %s %d주", c["ticker"], c["quantity"])
                 except Exception as e:
                     logger.warning("미체결 주문 취소 중 오류 (무시하고 계속): %s", e)
 
@@ -117,20 +131,17 @@ class TradingAgent:
             today = now.strftime("%Y-%m-%d %H:%M")
             run_ctx = _get_run_context(now)
 
-            # Google Search Grounding은 1회차(오전 진입)에만 사용
-            is_first_run = "1회차" in run_ctx
-            model = self._model_with_search if is_first_run else self._model_no_search
+            model = self._model_no_search
             user_message = (
                 f"[{today}] {run_ctx}\n"
-                "트레이딩을 시작합니다.\n\n"
-                "1. 현재 포트폴리오를 확인하세요.\n"
-                "2. TP/SL 조건 해당 종목을 즉시 처리하세요.\n"
-                "3. get_top_volume_stocks(n=30)으로 거래량 Top30 스캔 후 ETF/스팩 제외, 상위 10종목 선정하세요.\n"
-                "4. 각 종목의 현재가와 하이킨아시 패턴을 확인하고 매수/보류를 판단하세요.\n"
-                "5. 분석 결과와 판단 근거를 최종 보고서 형식으로 작성하세요."
+                "현재 포트폴리오를 점검하고 하이킨아시·VWAP 기준으로 매매를 결정합니다.\n\n"
+                "1. get_portfolio()로 현재 포트폴리오를 확인하세요.\n"
+                f"2. 수익률 +{TAKE_PROFIT_PCT}% 이상인 종목은 즉시 전량 매도(익절)하세요.\n"
+                f"3. 수익률 -{STOP_LOSS_PCT}% 이하인 종목은 즉시 전량 매도(손절)하세요.\n"
+                "4. get_top_volume_stocks(n=20)으로 거래량 Top20 스캔 후 하이킨아시·VWAP 기준으로 진입 종목을 선정하세요.\n"
+                "5. 분석 결과를 간결하게 요약하세요."
             )
-
-            logger.info(f"트레이딩 에이전트 시작: {watchlist} (Google Search: {'ON' if is_first_run else 'OFF'})")
+            logger.info("에이전트 시작")
             try:
                 chat = model.start_chat(response_validation=False)
                 response = chat.send_message(user_message)
@@ -213,3 +224,55 @@ class TradingAgent:
         finally:
             self.sim_portfolio_out = get_sim_portfolio()
             set_sim_portfolio(None)
+
+    def summarize_session(self, session_log: list[dict]) -> str:
+        """5회 루프 결과를 바탕으로 세션 최종 요약 생성 (LLM 1회 호출)."""
+        parts = []
+        for entry in session_log:
+            loop_num = entry["loop"]
+            ha_signals = entry.get("ha_signals", [])
+            result = entry.get("result") or "신호 없음 — 스킵"
+
+            ha_text = ""
+            if ha_signals:
+                items = [
+                    f"{s['ticker']}({s.get('name', '')}) HA={s['pattern']} VWAP={s['vwap_dev']:+.1f}%"
+                    for s in ha_signals
+                ]
+                ha_text = f"\n  [HA/VWAP] {' | '.join(items)}"
+
+            parts.append(f"【루프 {loop_num}】{ha_text}\n{result[:600]}")
+
+        session_text = "\n\n".join(parts)
+        prompt = (
+            f"다음은 이번 트레이딩 세션(총 {len(session_log)}회 루프)의 실행 결과입니다:\n\n"
+            f"{session_text}\n\n"
+            "1. get_portfolio()로 최종 포트폴리오 상태를 확인하세요.\n"
+            "2. 이번 세션의 매매 내역(매수/매도 종목, 이유)을 정리하세요.\n"
+            "3. 현재 보유 종목의 HA 패턴과 VWAP 상태를 간략히 평가하세요.\n"
+            "4. 다음 세션에서 주의할 점을 한 줄로 작성하세요."
+        )
+        try:
+            chat = self._model_no_search.start_chat(response_validation=False)
+            response = chat.send_message(prompt)
+            for _ in range(10):
+                rparts = response.candidates[0].content.parts if response.candidates else []
+                fn_calls = [p for p in rparts if p.function_call is not None]
+                if not fn_calls:
+                    break
+                fn_responses = []
+                for part in fn_calls:
+                    fn = part.function_call
+                    result_str = execute_tool(fn.name, dict(fn.args))
+                    logger.info("요약 Tool: %s", fn.name)
+                    fn_responses.append(
+                        Part.from_function_response(
+                            name=fn.name,
+                            response={"result": result_str},
+                        )
+                    )
+                response = chat.send_message(fn_responses)
+            return response.text or "세션 요약 완료 (텍스트 없음)"
+        except Exception as e:
+            logger.error("세션 요약 LLM 호출 실패: %s", e)
+            return "세션 요약 실패: " + str(e)
