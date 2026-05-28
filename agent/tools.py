@@ -9,6 +9,8 @@ from config import VWAP_MIN_ENTRY_PCT, VWAP_MAX_ENTRY_PCT, MAX_DAILY_BUY_PER_TIC
 
 logger = logging.getLogger(__name__)
 
+logger = logging.getLogger(__name__)
+
 def _is_dry_run() -> bool:
     return os.environ.get("DRY_RUN", "false").lower() == "true"
 
