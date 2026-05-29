@@ -5,7 +5,7 @@ import os
 import re
 from vertexai.generative_models import Tool, FunctionDeclaration
 from data.trade_log import log_trade
-from config import VWAP_MIN_ENTRY_PCT, VWAP_MAX_ENTRY_PCT, MAX_DAILY_BUY_PER_TICKER
+from config import VWAP_MAX_ENTRY_PCT, MAX_DAILY_BUY_PER_TICKER
 
 logger = logging.getLogger(__name__)
 
@@ -258,15 +258,8 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "message": f"{ticker} 당일 손절 종목 — 재진입 금지 (반복 손실 방지)",
                 }, ensure_ascii=False)
 
-            # VWAP 이탈률 가드레일 (코드 레벨)
+            # VWAP 이탈률 가드레일 (코드 레벨) — 최솟값은 프롬프트 지침으로 이전
             if vwap_dev is not None:
-                if vwap_dev < VWAP_MIN_ENTRY_PCT:
-                    logger.info("VWAP 이탈률 부족 차단: %s (%.2f%% < +%.1f%%)", ticker, vwap_dev, VWAP_MIN_ENTRY_PCT)
-                    return json.dumps({
-                        "success": False,
-                        "message": (f"{ticker} VWAP 이탈률 {vwap_dev:+.2f}% — "
-                                    f"최소 +{VWAP_MIN_ENTRY_PCT:.1f}% 미만 진입 금지 (모멘텀 부족)"),
-                    }, ensure_ascii=False)
                 if vwap_dev > VWAP_MAX_ENTRY_PCT:
                     logger.info("VWAP 과추격 차단: %s (%.2f%% > +%.1f%%)", ticker, vwap_dev, VWAP_MAX_ENTRY_PCT)
                     return json.dumps({
