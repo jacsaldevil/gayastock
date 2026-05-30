@@ -15,29 +15,32 @@ logger = logging.getLogger(__name__)
 
 TOKEN_CACHE_FILE = ".kis_token_cache.json"
 TOKEN_CACHE_BLOB = "kis_token_cache.json"
+_TOKEN_EXPIRY_BUFFER = timedelta(minutes=10)  # 만료 10분 전에 미리 갱신
 
 
 def _token_gcs_bucket() -> str:
-    # 모듈 로드 시점이 아닌 호출 시점에 읽어 Cloud Run 환경변수 지연 세팅 대응
-    return (os.environ.get("GCS_TOKEN_BUCKET") or os.environ.get("GCS_DATA_BUCKET", "")).strip()
+    """GCS_DATA_BUCKET 환경변수를 호출 시점에 읽어 반환 (Cloud Run 지연 세팅 대응)."""
+    return os.environ.get("GCS_DATA_BUCKET", "").strip()
 
 
 def _gcs_read_token() -> dict | None:
     bucket = _token_gcs_bucket()
     if not bucket:
-        logger.warning("GCS 토큰 캐시: GCS_DATA_BUCKET 미설정 — 매 실행마다 토큰 재발급됨")
+        logger.warning("GCS_DATA_BUCKET 미설정 — KIS 토큰 GCS 캐시 불가 (매 실행마다 신규 발급)")
         return None
     try:
         from google.cloud import storage
         blob = storage.Client().bucket(bucket).blob(TOKEN_CACHE_BLOB)
         text = blob.download_as_text()
-        logger.info("GCS 토큰 캐시 읽기 성공 (bucket=%s)", bucket)
-        return json.loads(text)
+        data = json.loads(text)
+        logger.debug("GCS 토큰 캐시 읽기 성공 (bucket=%s)", bucket)
+        return data
     except Exception as e:
-        if "404" in str(e) or "NotFound" in type(e).__name__:
+        err_str = str(e)
+        if "404" in err_str or "NotFound" in type(e).__name__:
             logger.info("GCS 토큰 캐시 없음 (첫 실행) — 신규 토큰 발급")
-            return None
-        logger.warning("GCS 토큰 읽기 실패 (%s): %s", type(e).__name__, e)
+        else:
+            logger.warning("GCS 토큰 읽기 실패 [%s] %s — 신규 토큰 발급", type(e).__name__, e)
     return None
 
 
@@ -49,9 +52,9 @@ def _gcs_write_token(data: dict):
         from google.cloud import storage
         blob = storage.Client().bucket(bucket).blob(TOKEN_CACHE_BLOB)
         blob.upload_from_string(json.dumps(data), content_type="application/json")
-        logger.info("GCS 토큰 캐시 저장 완료 (bucket=%s)", bucket)
+        logger.debug("GCS 토큰 캐시 저장 완료 (bucket=%s)", bucket)
     except Exception as e:
-        logger.warning("GCS 토큰 저장 실패 (%s): %s", type(e).__name__, e)
+        logger.warning("GCS 토큰 저장 실패 [%s] %s", type(e).__name__, e)
 
 
 _KIS_TOKEN_ERROR_CODES = frozenset({"EGW00121", "EGW00123", "EGW00124"})
@@ -75,38 +78,37 @@ class KISBroker:
     # ── 인증 ─────────────────────────────────────────────
 
     def _load_cached_token(self):
-        """GCS → 로컬 파일 순서로 캐시된 토큰 재사용"""
-        # 1. GCS 우선 시도
+        """GCS → 로컬 파일 순서로 캐시된 토큰 로드. 만료 10분 이내면 미사용."""
+        from data.utils import KST
         data = _gcs_read_token()
-        # 2. GCS 없으면 로컬 파일
         if data is None and os.path.exists(TOKEN_CACHE_FILE):
             try:
                 with open(TOKEN_CACHE_FILE, encoding="utf-8") as f:
                     data = json.load(f)
+                logger.debug("로컬 토큰 캐시 파일 읽기 성공")
             except Exception:
-                return
+                pass
         if data is None:
             return
         try:
             expires_at = datetime.fromisoformat(data["expires_at"])
-            # fromisoformat이 naive datetime 반환하면 KST로 보정
-            from data.utils import KST
             if expires_at.tzinfo is None:
                 expires_at = expires_at.replace(tzinfo=KST)
             now = get_now_kst()
-            if now < expires_at:
+            remaining_sec = (expires_at - now).total_seconds()
+            if remaining_sec > _TOKEN_EXPIRY_BUFFER.total_seconds():
                 self._access_token = data["access_token"]
                 self._token_expires_at = expires_at
-                remaining = int((expires_at - now).total_seconds() / 60)
-                logger.info("KIS 토큰 캐시 재사용 (만료: %s, 잔여 %d분)", expires_at.strftime("%H:%M"), remaining)
+                logger.info("KIS 토큰 캐시 재사용 — 잔여 %d분 (만료: %s)",
+                            int(remaining_sec / 60), expires_at.strftime("%m-%d %H:%M"))
             else:
-                logger.info("KIS 토큰 캐시 만료됨 (만료: %s) — 신규 발급", expires_at.strftime("%H:%M"))
+                logger.info("KIS 토큰 캐시 만료 임박(잔여 %.0f분) 또는 만료됨 — 신규 발급",
+                            max(0, remaining_sec / 60))
         except Exception as e:
-            logger.warning("KIS 토큰 캐시 파싱 실패 (%s): %s — 신규 발급", type(e).__name__, e)
+            logger.warning("KIS 토큰 캐시 파싱 실패 [%s] %s — 신규 발급", type(e).__name__, e)
 
     def _save_token_cache(self, token: str, expires_at: datetime):
         data = {"access_token": token, "expires_at": expires_at.isoformat()}
-        # GCS와 로컬 둘 다 저장 (로컬은 개발 환경 fallback)
         _gcs_write_token(data)
         try:
             with open(TOKEN_CACHE_FILE, "w", encoding="utf-8") as f:
@@ -116,8 +118,11 @@ class KISBroker:
             pass
 
     def _get_token(self) -> str:
-        if self._access_token and self._token_expires_at and get_now_kst() < self._token_expires_at:
-            return self._access_token
+        if self._access_token and self._token_expires_at:
+            remaining_sec = (self._token_expires_at - get_now_kst()).total_seconds()
+            if remaining_sec > _TOKEN_EXPIRY_BUFFER.total_seconds():
+                return self._access_token
+            logger.info("KIS 토큰 만료 임박 (잔여 %.0f분) — 갱신", max(0, remaining_sec / 60))
 
         url = f"{self.base_url}/oauth2/tokenP"
         body = {
@@ -131,7 +136,6 @@ class KISBroker:
         if "access_token" not in data:
             raise ValueError(f"KIS 토큰 발급 실패: {data.get('msg1', data.get('msg', str(data)))}")
         self._access_token = data["access_token"]
-        # KIS API가 실제 만료 시각을 반환하면 사용, 없으면 23시간 후
         raw_exp = data.get("access_token_token_expired", "")
         try:
             from data.utils import KST
@@ -177,7 +181,7 @@ class KISBroker:
                     except Exception:
                         pass
                 if need_reissue:
-                    logger.warning("KIS 토큰 오류 감지 (status=%d, msg_cd=%s) — 강제 재발급 후 재시도",
+                    logger.warning("KIS 토큰 거부 감지 (HTTP %d, msg_cd=%s) — 재발급 후 재시도",
                                    res.status_code, msg_cd)
                     self._access_token = None
                     self._token_expires_at = None

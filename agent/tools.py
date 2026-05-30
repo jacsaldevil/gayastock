@@ -9,7 +9,6 @@ from config import VWAP_MAX_ENTRY_PCT, MAX_DAILY_BUY_PER_TICKER
 
 logger = logging.getLogger(__name__)
 
-logger = logging.getLogger(__name__)
 
 def _is_dry_run() -> bool:
     return os.environ.get("DRY_RUN", "false").lower() == "true"
@@ -57,7 +56,11 @@ def load_stopped_out_today() -> None:
         for t in get_trades(limit=500):
             if t.get("ts", "")[:10] != today:
                 continue
-            if t.get("action") == "BUY" and t.get("success", True):
+            # DRY-RUN 매수는 success=False로 기록되지만 일일 한도 추적에는 포함
+            is_buy = t.get("action") == "BUY" and (
+                t.get("success", True) or "[DRY-RUN]" in t.get("reason", "")
+            )
+            if is_buy:
                 tk = t["ticker"]
                 _daily_buy_count[tk] = _daily_buy_count.get(tk, 0) + 1
             elif t.get("action") == "SELL" and _is_stoploss_reason(t.get("reason", "")):
