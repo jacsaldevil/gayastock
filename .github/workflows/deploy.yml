@@ -51,17 +51,25 @@ jobs:
         env:
           GCS_SECRET_BUCKET: ${{ secrets.GCS_DATA_BUCKET }}
         run: |
-          # secrets.GCS_DATA_BUCKET 없으면 프로젝트 ID 기반 자동 사용
           BUCKET="${GCS_SECRET_BUCKET:-${PROJECT_ID}-gayastock}"
-          # 버킷이 없으면 생성 (이미 있으면 무시)
           gsutil mb -l $REGION -p $PROJECT_ID gs://$BUCKET 2>/dev/null || true
-          # runner SA에 버킷 objectAdmin 권한 부여
           gsutil iam ch \
             "serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com:roles/storage.objectAdmin" \
             gs://$BUCKET 2>/dev/null || true
           # logs/ 경로 공개 읽기 허용 (Claude 직접 접근용)
           gsutil iam ch allUsers:objectViewer gs://$BUCKET 2>/dev/null || true
           echo "GCS_DATA_BUCKET=$BUCKET" >> $GITHUB_ENV
+
+      - name: Ensure GCS token bucket (비공개)
+        continue-on-error: true
+        run: |
+          # 토큰 전용 버킷 — 공개 접근 없음, runner SA만 접근 가능
+          TOKEN_BUCKET="${PROJECT_ID}-gayastock-token"
+          gsutil mb -l $REGION -p $PROJECT_ID gs://$TOKEN_BUCKET 2>/dev/null || true
+          gsutil iam ch \
+            "serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com:roles/storage.objectAdmin" \
+            gs://$TOKEN_BUCKET 2>/dev/null || true
+          echo "GCS_TOKEN_BUCKET=$TOKEN_BUCKET" >> $GITHUB_ENV
 
       - name: Configure Docker
         run: gcloud auth configure-docker $REGISTRY --quiet
@@ -98,7 +106,7 @@ jobs:
       - name: Update Cloud Run Job (Agent)
         run: |
           IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
-          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=3,INNER_LOOP_SLEEP_SEC=30"
+          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,GCS_TOKEN_BUCKET=$GCS_TOKEN_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=3,INNER_LOOP_SLEEP_SEC=30"
           SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 600 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
           if gcloud run jobs describe $AGENT_JOB --region $REGION --quiet 2>/dev/null; then

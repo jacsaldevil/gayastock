@@ -19,8 +19,14 @@ _TOKEN_EXPIRY_BUFFER = timedelta(minutes=10)  # 만료 10분 전에 미리 갱�
 
 
 def _token_gcs_bucket() -> str:
-    """GCS_DATA_BUCKET 환경변수를 호출 시점에 읽어 반환 (Cloud Run 지연 세팅 대응)."""
-    return os.environ.get("GCS_DATA_BUCKET", "").strip()
+    """토큰 전용 비공개 버킷(GCS_TOKEN_BUCKET) 우선, 없으면 데이터 버킷으로 폴백."""
+    token_bucket = os.environ.get("GCS_TOKEN_BUCKET", "").strip()
+    if token_bucket:
+        return token_bucket
+    data_bucket = os.environ.get("GCS_DATA_BUCKET", "").strip()
+    if not data_bucket:
+        logger.warning("GCS_TOKEN_BUCKET / GCS_DATA_BUCKET 미설정 — KIS 토큰 캐시 불가 (매 실행 신규 발급)")
+    return data_bucket
 
 
 def _gcs_read_token() -> dict | None:
