@@ -192,6 +192,10 @@ class KISBroker:
                     self._access_token = None
                     self._token_expires_at = None
                     continue
+                if res.status_code == 500:
+                    logger.warning("KIS API 500 에러 — 1초 후 재시도 (%s)", url)
+                    time.sleep(1)
+                    continue
             return res
         return res
 
