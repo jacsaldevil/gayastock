@@ -172,10 +172,12 @@ class KISBroker:
         time.sleep(0.05)
 
     def _api_call(self, method: str, url: str, tr_id: str, **kwargs) -> requests.Response:
-        """KIS API 단일 호출 포인트 — 토큰 오류 감지 시 1회 재발급 후 재시도"""
-        for attempt in range(2):
+        """KIS API 단일 호출 포인트 — 토큰 오류 1회 재발급, 500 에러 최대 3회 재시도"""
+        _token_reissued = False
+        for attempt in range(4):
             res = requests.request(method, url, headers=self._headers(tr_id), **kwargs)
-            if attempt == 0:
+            # 토큰 오류 — 1회만 재발급 후 재시도
+            if not _token_reissued:
                 need_reissue = res.status_code == 401
                 msg_cd = ""
                 if not need_reissue:
@@ -191,11 +193,14 @@ class KISBroker:
                                    res.status_code, msg_cd)
                     self._access_token = None
                     self._token_expires_at = None
+                    _token_reissued = True
                     continue
-                if res.status_code == 500:
-                    logger.warning("KIS API 500 에러 — 1초 후 재시도 (%s)", url)
-                    time.sleep(1)
-                    continue
+            # 500 에러 — 최대 3회 재시도 (1s → 2s → 3s)
+            if res.status_code == 500 and attempt < 3:
+                wait = attempt + 1
+                logger.warning("KIS API 500 에러 — %d초 후 재시도 (%d/3) (%s)", wait, attempt + 1, url)
+                time.sleep(wait)
+                continue
             return res
         return res
 
@@ -454,20 +459,26 @@ class KISBroker:
         """잔고 및 보유 종목 조회 (VTTC8434R 모의 / TTTC8434R 실투자)"""
         tr_id = "VTTC8434R" if KIS_MOCK else "TTTC8434R"
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
-        params = {
-            "CANO": self.acc_no,
-            "ACNT_PRDT_CD": self.acc_suffix,
-            "AFHR_FLPR_YN": "N",
-            "OFL_YN": "",
-            "INQR_DVSN": "02",
-            "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N",
-            "FNCG_AMT_AUTO_RDPT_YN": "N",
-            "PRCS_DVSN": "01",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
-        }
-        res = self._api_call("GET", url, tr_id, params=params, timeout=10)
+        # INQR_DVSN=02(개별) 실패 시 01(합산)으로 폴백
+        for inqr_dvsn in ("02", "01"):
+            params = {
+                "CANO": self.acc_no,
+                "ACNT_PRDT_CD": self.acc_suffix,
+                "AFHR_FLPR_YN": "N",
+                "OFL_YN": "",
+                "INQR_DVSN": inqr_dvsn,
+                "UNPR_DVSN": "01",
+                "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N",
+                "PRCS_DVSN": "01",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            }
+            res = self._api_call("GET", url, tr_id, params=params, timeout=10)
+            if res.status_code != 500:
+                break
+            logger.warning("잔고 조회 INQR_DVSN=%s 500 에러 — %s로 폴백",
+                           inqr_dvsn, "01" if inqr_dvsn == "02" else "포기")
         res.raise_for_status()
         data = res.json()
         self._smart_sleep()
