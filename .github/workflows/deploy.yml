@@ -106,7 +106,7 @@ jobs:
       - name: Update Cloud Run Job (Agent)
         run: |
           IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
-          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,GCS_TOKEN_BUCKET=$GCS_TOKEN_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=3,INNER_LOOP_SLEEP_SEC=30"
+          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,GCS_TOKEN_BUCKET=$GCS_TOKEN_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=1,INNER_LOOP_SLEEP_SEC=90"
           SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 600 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
           if gcloud run jobs describe $AGENT_JOB --region $REGION --quiet 2>/dev/null; then
@@ -115,16 +115,18 @@ jobs:
             gcloud run jobs create $AGENT_JOB $COMMON_FLAGS
           fi
 
-      - name: Remove old Cloud Scheduler jobs (10회 → 20회 전환)
+      - name: Remove old Cloud Scheduler jobs (20회 → 14회 전환)
         continue-on-error: true
         run: |
           for OLD in "${AGENT_JOB}-morning" "${AGENT_JOB}-midday" "${AGENT_JOB}-afternoon" \
                      "${AGENT_JOB}-run1" "${AGENT_JOB}-run2" "${AGENT_JOB}-run3" \
-                     "${AGENT_JOB}-run4" "${AGENT_JOB}-run5"; do
+                     "${AGENT_JOB}-run4" "${AGENT_JOB}-run5" \
+                     "${AGENT_JOB}-run15" "${AGENT_JOB}-run16" "${AGENT_JOB}-run17" \
+                     "${AGENT_JOB}-run18" "${AGENT_JOB}-run19" "${AGENT_JOB}-run20"; do
             gcloud scheduler jobs delete "$OLD" --location $REGION --quiet 2>/dev/null || true
           done
 
-      - name: Ensure Cloud Scheduler jobs (20회/일)
+      - name: Ensure Cloud Scheduler jobs (14회/일, 30분 간격 09:00~15:30)
         continue-on-error: true
         run: |
           SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
@@ -132,26 +134,20 @@ jobs:
           FLAGS="--location $REGION --time-zone Asia/Seoul --uri $URI --http-method POST --oauth-service-account-email $SA --quiet"
 
           declare -A SCHEDULES=(
-            ["${AGENT_JOB}-run01"]="20 9  * * 1-5"
-            ["${AGENT_JOB}-run02"]="27 9  * * 1-5"
-            ["${AGENT_JOB}-run03"]="34 9  * * 1-5"
-            ["${AGENT_JOB}-run04"]="41 9  * * 1-5"
-            ["${AGENT_JOB}-run05"]="48 9  * * 1-5"
-            ["${AGENT_JOB}-run06"]="55 9  * * 1-5"
-            ["${AGENT_JOB}-run07"]="2  10 * * 1-5"
-            ["${AGENT_JOB}-run08"]="9  10 * * 1-5"
-            ["${AGENT_JOB}-run09"]="16 10 * * 1-5"
-            ["${AGENT_JOB}-run10"]="23 10 * * 1-5"
-            ["${AGENT_JOB}-run11"]="30 10 * * 1-5"
-            ["${AGENT_JOB}-run12"]="37 10 * * 1-5"
-            ["${AGENT_JOB}-run13"]="44 10 * * 1-5"
-            ["${AGENT_JOB}-run14"]="51 10 * * 1-5"
-            ["${AGENT_JOB}-run15"]="58 10 * * 1-5"
-            ["${AGENT_JOB}-run16"]="5  11 * * 1-5"
-            ["${AGENT_JOB}-run17"]="12 11 * * 1-5"
-            ["${AGENT_JOB}-run18"]="19 11 * * 1-5"
-            ["${AGENT_JOB}-run19"]="26 11 * * 1-5"
-            ["${AGENT_JOB}-run20"]="30 11 * * 1-5"
+            ["${AGENT_JOB}-run01"]="0  9  * * 1-5"
+            ["${AGENT_JOB}-run02"]="30 9  * * 1-5"
+            ["${AGENT_JOB}-run03"]="0  10 * * 1-5"
+            ["${AGENT_JOB}-run04"]="30 10 * * 1-5"
+            ["${AGENT_JOB}-run05"]="0  11 * * 1-5"
+            ["${AGENT_JOB}-run06"]="30 11 * * 1-5"
+            ["${AGENT_JOB}-run07"]="0  12 * * 1-5"
+            ["${AGENT_JOB}-run08"]="30 12 * * 1-5"
+            ["${AGENT_JOB}-run09"]="0  13 * * 1-5"
+            ["${AGENT_JOB}-run10"]="30 13 * * 1-5"
+            ["${AGENT_JOB}-run11"]="0  14 * * 1-5"
+            ["${AGENT_JOB}-run12"]="30 14 * * 1-5"
+            ["${AGENT_JOB}-run13"]="0  15 * * 1-5"
+            ["${AGENT_JOB}-run14"]="30 15 * * 1-5"
           )
 
           for JOB_NAME in "${!SCHEDULES[@]}"; do

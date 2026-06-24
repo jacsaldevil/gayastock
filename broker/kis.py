@@ -404,6 +404,142 @@ class KISBroker:
             })
         return result[-days:]  # 최근 days개만 반환
 
+    def get_weekly_candles(self, ticker: str, weeks: int = 20) -> list[dict]:
+        """주봉 조회 (TR: FHKST03010100, 주봉) — 최근 N주 OHLCV"""
+        end = get_now_kst().strftime("%Y%m%d")
+        start = (get_now_kst() - timedelta(days=weeks * 7 + 30)).strftime("%Y%m%d")
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": ticker,
+            "FID_INPUT_DATE_1": start,
+            "FID_INPUT_DATE_2": end,
+            "FID_PERIOD_DIV_CODE": "W",
+            "FID_ORG_ADJ_PRC": "0",
+        }
+        res = self._api_call("GET", url, "FHKST03010100", params=params, timeout=10)
+        res.raise_for_status()
+        output = res.json().get("output2", [])
+        self._smart_sleep()
+
+        result = []
+        for r in reversed(output):
+            close = _to_int(r.get("stck_clpr"))
+            if close == 0:
+                continue
+            result.append({
+                "date": r.get("stck_bsop_date", ""),
+                "open": _to_int(r.get("stck_oprc")),
+                "high": _to_int(r.get("stck_hgpr")),
+                "low": _to_int(r.get("stck_lwpr")),
+                "close": close,
+                "volume": _to_int(r.get("acml_vol")),
+            })
+        return result[-weeks:]
+
+    @staticmethod
+    def calculate_bb_rsi(candles: list[dict], bb_period: int = 20, rsi_period: int = 14) -> dict:
+        """일봉 캔들로 볼린저밴드 + RSI 계산 (종가 기준)"""
+        min_required = max(bb_period, rsi_period + 1)
+        if len(candles) < min_required:
+            return {"error": f"캔들 부족: {len(candles)}개 (최소 {min_required}개 필요)"}
+
+        closes = [c["close"] for c in candles]
+
+        # Bollinger Bands
+        recent = closes[-bb_period:]
+        sma = sum(recent) / bb_period
+        variance = sum((x - sma) ** 2 for x in recent) / bb_period
+        std = variance ** 0.5
+        bb_upper = sma + 2 * std
+        bb_lower = sma - 2 * std
+
+        # RSI (Wilder's smoothing)
+        gains, losses = [], []
+        for i in range(1, len(closes)):
+            diff = closes[i] - closes[i - 1]
+            gains.append(max(diff, 0))
+            losses.append(max(-diff, 0))
+
+        avg_gain = sum(gains[:rsi_period]) / rsi_period
+        avg_loss = sum(losses[:rsi_period]) / rsi_period
+        for i in range(rsi_period, len(gains)):
+            avg_gain = (avg_gain * (rsi_period - 1) + gains[i]) / rsi_period
+            avg_loss = (avg_loss * (rsi_period - 1) + losses[i]) / rsi_period
+
+        rsi = 100.0 if avg_loss == 0 else 100 - 100 / (1 + avg_gain / avg_loss)
+
+        return {
+            "bb_upper": round(bb_upper),
+            "bb_middle": round(sma),
+            "bb_lower": round(bb_lower),
+            "bb_width_pct": round((bb_upper - bb_lower) / sma * 100, 2) if sma > 0 else 0,
+            "rsi": round(rsi, 2),
+        }
+
+    def get_technical_indicators(self, ticker: str) -> dict:
+        """BB(20일), RSI(14일), 주봉 추세 통합 반환 — 스윙 트레이딩 진입/청산 판단용"""
+        daily = self.get_daily_candles(ticker, days=60)
+        if len(daily) < 25:
+            return {"ticker": ticker, "error": f"일봉 데이터 부족: {len(daily)}개"}
+
+        tech = self.calculate_bb_rsi(daily)
+        if "error" in tech:
+            return {"ticker": ticker, **tech}
+
+        # 현재가로 실시간 BB 위치 계산
+        try:
+            price_info = self.get_current_price(ticker)
+            current_price = price_info["current_price"]
+            tech["name"] = price_info.get("name", "")
+            tech["change_rate"] = price_info.get("change_rate", 0)
+        except Exception as e:
+            logger.warning("현재가 조회 실패, 마지막 종가 사용 (%s): %s", ticker, e)
+            current_price = daily[-1]["close"]
+            tech["name"] = ""
+            tech["change_rate"] = 0
+
+        tech["current_price"] = current_price
+        bb_upper = tech["bb_upper"]
+        bb_lower = tech["bb_lower"]
+        sma = tech["bb_middle"]
+        band_half = (bb_upper - sma)  # = 2 * std
+
+        if current_price <= bb_lower:
+            bb_position = "below_lower"
+        elif current_price <= bb_lower + band_half * 0.15:
+            bb_position = "lower_touch"
+        elif current_price >= bb_upper:
+            bb_position = "above_upper"
+        elif current_price >= bb_upper - band_half * 0.15:
+            bb_position = "upper_touch"
+        else:
+            bb_position = "middle"
+        tech["bb_position"] = bb_position
+
+        # 주봉 추세 (최근 5주 vs 직전 5주 평균 비교)
+        try:
+            weekly = self.get_weekly_candles(ticker, weeks=20)
+            if len(weekly) >= 10:
+                recent_avg = sum(c["close"] for c in weekly[-5:]) / 5
+                older_avg = sum(c["close"] for c in weekly[-10:-5]) / 5
+                change_pct = (recent_avg - older_avg) / older_avg * 100 if older_avg > 0 else 0
+                if change_pct >= 2.0:
+                    weekly_trend = "up"
+                elif change_pct <= -2.0:
+                    weekly_trend = "down"
+                else:
+                    weekly_trend = "sideways"
+                tech["weekly_trend"] = weekly_trend
+                tech["weekly_change_pct"] = round(change_pct, 2)
+            else:
+                tech["weekly_trend"] = "unknown"
+        except Exception as e:
+            logger.warning("주봉 추세 조회 실패 (%s): %s", ticker, e)
+            tech["weekly_trend"] = "unknown"
+
+        return {"ticker": ticker, **tech}
+
     def get_financial_summary(self, ticker: str) -> dict:
         """재무 요약 — 손익계산서 + 재무비율 통합 반환 (LLM용 단일 호출)"""
         try:

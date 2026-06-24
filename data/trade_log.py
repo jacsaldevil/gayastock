@@ -160,7 +160,9 @@ def _read_all(blob_name: str, filepath: str) -> list[dict]:
 
 
 def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, success: bool,
-              name: str = "", profit: int = 0, vwap_dev: float | None = None, ha_pattern: str = ""):
+              name: str = "", profit: int = 0,
+              vwap_dev: float | None = None, ha_pattern: str = "",
+              bb_signal: str = "", rsi_value: float | None = None):
     record: dict = {
         "ts": get_now_kst().isoformat(),
         "action": action,
@@ -176,6 +178,10 @@ def log_trade(action: str, ticker: str, quantity: int, price: int, reason: str, 
         record["vwap_dev"] = round(float(vwap_dev), 2)
     if ha_pattern:
         record["ha_pattern"] = ha_pattern
+    if bb_signal:
+        record["bb_signal"] = bb_signal
+    if rsi_value is not None:
+        record["rsi_value"] = round(float(rsi_value), 2)
     if action == "SELL":
         record["profit"] = profit
     _append(_TRADE_BLOB, TRADE_LOG_FILE, record)

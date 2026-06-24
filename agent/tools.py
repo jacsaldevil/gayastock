@@ -5,7 +5,7 @@ import os
 import re
 from vertexai.generative_models import Tool, FunctionDeclaration
 from data.trade_log import log_trade
-from config import VWAP_MAX_ENTRY_PCT, MAX_DAILY_BUY_PER_TICKER
+from config import RSI_MAX_ENTRY, MAX_DAILY_BUY_PER_TICKER
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +86,7 @@ GEMINI_TOOLS = Tool(
             name="get_stock_price",
             description=(
                 "주식 현재가 및 기본 투자지표(PER, PBR, EPS, 등락률)를 조회합니다. "
-                "매수/매도 판단 전에 반드시 호출하세요."
+                "BB/RSI 확인 후 최종 진입가 검증 시 호출하세요."
             ),
             parameters={
                 "type": "object",
@@ -98,50 +98,20 @@ GEMINI_TOOLS = Tool(
         ),
         FunctionDeclaration(
             name="get_portfolio",
-            description="현재 보유 종목, 수익률, 예수금(현금) 잔고를 조회합니다.",
+            description=(
+                "현재 보유 종목, 수익률, 예수금(현금) 잔고를 조회합니다. "
+                "hold_days(보유일수)와 buy_date(최초 매수일)가 포함됩니다. "
+                "매 실행 시 가장 먼저 호출하세요."
+            ),
             parameters={"type": "object", "properties": {}},
         ),
         FunctionDeclaration(
-            name="buy_stock",
+            name="get_technical_indicators",
             description=(
-                "주식을 시장가로 매수합니다. "
-                "매수 전 get_portfolio로 예수금, get_heikin_ashi_candles로 VWAP·HA를 반드시 확인하세요. "
-                "포지션 사이징: 가용예수금 × HA강도 비율 ÷ 남은 슬롯 수로 계산하세요."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "ticker":      {"type": "string",  "description": "6자리 종목코드"},
-                    "quantity":    {"type": "integer", "description": "매수 수량 (주)"},
-                    "reason":      {"type": "string",  "description": "매수 근거 (VWAP 이탈률, HA 패턴, 거래량 순위 포함)"},
-                    "vwap_dev":    {"type": "number",  "description": "매수 시점 VWAP 이탈률 (%) — get_heikin_ashi_candles의 vwap_deviation_pct"},
-                    "ha_pattern":  {"type": "string",  "description": "매수 시점 HA 패턴 — 예: 강한상승, 일반양봉, 음봉 등"},
-                },
-                "required": ["ticker", "quantity", "reason"],
-            },
-        ),
-        FunctionDeclaration(
-            name="get_top_volume_stocks",
-            description=(
-                "현재 시장 거래량 상위 종목을 조회합니다. "
-                "반환된 목록에서 ETF/스팩/리츠 등을 제외한 후 상위 10종목을 분석 대상으로 선정하세요. "
-                "n=30을 사용하세요 (필터 후 10종목 확보를 위해 여유있게 조회)."
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "n": {"type": "integer", "description": "조회할 종목 수 (기본 20)"},
-                },
-            },
-        ),
-        FunctionDeclaration(
-            name="get_heikin_ashi_candles",
-            description=(
-                "3분봉 하이킨아시 캔들과 VWAP을 조회합니다. "
-                "반환값: candles(HA 캔들 목록), vwap(VWAP 가격), vwap_deviation_pct(이탈률%), current_price. "
-                "vwap_deviation_pct = (현재가-VWAP)/VWAP×100. "
-                "0~+3%: 관성 일치(최적 진입), +3% 초과: 고점 주의, 음수: VWAP 미돌파. "
-                "HA 패턴과 VWAP 이탈률을 함께 판단하세요."
+                "종목의 볼린저밴드(BB, 20일), RSI(14일), 주봉 추세를 조회합니다. "
+                "반환값: bb_upper/bb_middle/bb_lower(밴드 가격), bb_position(below_lower/lower_touch/middle/upper_touch/above_upper), "
+                "bb_width_pct(밴드 폭%), rsi(RSI값 0~100), weekly_trend(up/down/sideways/unknown), current_price. "
+                "매수 판단 전에 반드시 호출하세요. 매도 시에도 BB 상단/RSI 확인에 활용하세요."
             ),
             parameters={
                 "type": "object",
@@ -152,13 +122,46 @@ GEMINI_TOOLS = Tool(
             },
         ),
         FunctionDeclaration(
+            name="get_top_volume_stocks",
+            description=(
+                "현재 시장 거래량 상위 종목을 조회합니다. "
+                "반환된 목록에서 ETF/스팩/리츠 등을 제외한 후 후보 종목을 선정하세요. "
+                "n=50을 사용하여 충분한 후보군을 확보한 뒤 get_technical_indicators로 BB/RSI를 확인하세요."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "n": {"type": "integer", "description": "조회할 종목 수 (기본 20, 최대 50 권장)"},
+                },
+            },
+        ),
+        FunctionDeclaration(
+            name="buy_stock",
+            description=(
+                "주식을 매수합니다. "
+                "매수 전 get_technical_indicators로 BB 하단 근접(lower_touch/below_lower) + RSI≤35 + 주봉 우상향(up)을 반드시 확인하세요. "
+                "포지션 사이징: 가용예수금 × 30~50% ÷ 남은 슬롯 수로 계산하세요."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ticker":     {"type": "string",  "description": "6자리 종목코드"},
+                    "quantity":   {"type": "integer", "description": "매수 수량 (주)"},
+                    "reason":     {"type": "string",  "description": "매수 근거 (BB 위치, RSI 값, 주봉 추세, 재무 건전성 포함)"},
+                    "bb_signal":  {"type": "string",  "description": "BB 위치 — below_lower/lower_touch/middle/upper_touch/above_upper"},
+                    "rsi_value":  {"type": "number",  "description": "매수 시점 RSI 값 (0~100)"},
+                },
+                "required": ["ticker", "quantity", "reason"],
+            },
+        ),
+        FunctionDeclaration(
             name="get_financial_summary",
             description=(
                 "종목의 연간 재무 요약을 조회합니다 (최근 4개 연도). "
                 "반환값: revenue(매출), operating_profit(영업이익), net_profit(순이익), "
                 "operating_margin_pct(영업이익률%), roe_pct(ROE%), debt_ratio_pct(부채비율%), "
                 "per, pbr, eps. "
-                "매수 전 재무 건전성과 성장성을 파악하고 싶을 때 호출하세요."
+                "BB/RSI 조건 충족 후 재무 건전성 검증 시 호출하세요."
             ),
             parameters={
                 "type": "object",
@@ -171,10 +174,8 @@ GEMINI_TOOLS = Tool(
         FunctionDeclaration(
             name="get_daily_price_chart",
             description=(
-                "일봉 차트 데이터를 조회합니다. "
-                "반환값: 날짜별 open/high/low/close/volume/change_rate 목록. "
-                "중장기 추세, 지지/저항 구간, 최근 급등 여부 파악에 사용하세요. "
-                "days 파라미터로 조회 기간을 조정할 수 있습니다 (기본 60거래일)."
+                "일봉 차트 데이터를 조회합니다 (최대 60거래일). "
+                "지지/저항 구간, 52주 고저점, 최근 급락 원인 파악에 활용하세요."
             ),
             parameters={
                 "type": "object",
@@ -187,15 +188,19 @@ GEMINI_TOOLS = Tool(
         ),
         FunctionDeclaration(
             name="sell_stock",
-            description="보유 종목을 시장가로 매도합니다.",
+            description=(
+                "보유 종목을 매도합니다. "
+                "매도 사유: BB 상단 근접/이탈(upper_touch/above_upper), RSI≥70, "
+                "목표가(+8%) 달성, 손절(-5%), 보유기간 초과(10영업일) 중 명시하세요."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "ticker":      {"type": "string",  "description": "6자리 종목코드"},
-                    "quantity":    {"type": "integer", "description": "매도 수량 (주)"},
-                    "reason":      {"type": "string",  "description": "매도 근거 (TP/SL/VWAP음수/강제청산 중 명시)"},
-                    "vwap_dev":    {"type": "number",  "description": "매도 시점 VWAP 이탈률 (%) — get_heikin_ashi_candles의 vwap_deviation_pct"},
-                    "ha_pattern":  {"type": "string",  "description": "매도 시점 HA 패턴"},
+                    "ticker":     {"type": "string",  "description": "6자리 종목코드"},
+                    "quantity":   {"type": "integer", "description": "매도 수량 (주)"},
+                    "reason":     {"type": "string",  "description": "매도 근거 (TP/SL/BB상단/RSI과매수/보유기간초과 중 명시)"},
+                    "bb_signal":  {"type": "string",  "description": "매도 시점 BB 위치"},
+                    "rsi_value":  {"type": "number",  "description": "매도 시점 RSI 값"},
                 },
                 "required": ["ticker", "quantity", "reason"],
             },
@@ -217,12 +222,12 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             result = broker.get_current_price(tool_input["ticker"])
 
         elif tool_name == "get_top_volume_stocks":
-            n = int(tool_input.get("n", 20))
+            n = min(int(tool_input.get("n", 20)), 50)
             result = broker.get_top_volume_stocks(n)
 
-        elif tool_name == "get_heikin_ashi_candles":
+        elif tool_name == "get_technical_indicators":
             _validate_ticker(tool_input["ticker"])
-            result = broker.get_minute_candles(tool_input["ticker"])
+            result = broker.get_technical_indicators(tool_input["ticker"])
 
         elif tool_name == "get_financial_summary":
             _validate_ticker(tool_input["ticker"])
@@ -237,19 +242,52 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             if _is_dry_run():
                 global _sim_portfolio
                 if _sim_portfolio is None:
-                    # 시뮬레이션 초기 자본 고정 (실제 모의계좌 잔고 무관)
                     _sim_portfolio = {"cash": 1_000_000, "holdings": [], "total_eval": 1_000_000, "profit_loss": 0}
                 result = _sim_portfolio
             else:
                 result = broker.get_balance()
+
+            # 보유기간(hold_days) 계산 — 스윙 트레이딩 최대 보유일 초과 판단용
+            try:
+                from data.trade_log import get_trades
+                from data.utils import get_now_kst
+                from datetime import date as _date
+                today = get_now_kst().date()
+                # 오래된 순으로 정렬해 포지션 진입일 추적
+                all_trades = sorted(get_trades(limit=1000), key=lambda t: t.get("ts", ""))
+                position_open_date: dict[str, str] = {}
+                for t in all_trades:
+                    tk = t.get("ticker", "")
+                    if not tk:
+                        continue
+                    is_buy = t.get("action") == "BUY" and (
+                        t.get("success") or "[DRY-RUN]" in t.get("reason", "")
+                    )
+                    is_sell = t.get("action") == "SELL" and (
+                        t.get("success") or "[DRY-RUN]" in t.get("reason", "")
+                    )
+                    if is_buy and tk not in position_open_date:
+                        position_open_date[tk] = t.get("ts", "")[:10]
+                    elif is_sell:
+                        position_open_date.pop(tk, None)
+                for h in result.get("holdings", []):
+                    tk = h["ticker"]
+                    if tk in position_open_date:
+                        h["hold_days"] = (_date.today() - _date.fromisoformat(position_open_date[tk])).days
+                        h["buy_date"] = position_open_date[tk]
+                    else:
+                        h["hold_days"] = 0
+                        h["buy_date"] = "unknown"
+            except Exception as e:
+                logger.warning("보유기간 계산 실패: %s", e)
 
         elif tool_name == "buy_stock":
             ticker = tool_input["ticker"]
             _validate_ticker(ticker)
             qty = int(tool_input["quantity"])
             reason = tool_input.get("reason", "")
-            vwap_dev = tool_input.get("vwap_dev")
-            ha_pattern = tool_input.get("ha_pattern", "")
+            bb_signal = tool_input.get("bb_signal", "")
+            rsi_value = tool_input.get("rsi_value")
 
             if qty <= 0:
                 return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
@@ -261,17 +299,24 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "message": f"{ticker} 당일 손절 종목 — 재진입 금지 (반복 손실 방지)",
                 }, ensure_ascii=False)
 
-            # VWAP 이탈률 가드레일 (코드 레벨) — 최솟값은 프롬프트 지침으로 이전
-            if vwap_dev is not None:
-                if vwap_dev > VWAP_MAX_ENTRY_PCT:
-                    logger.info("VWAP 과추격 차단: %s (%.2f%% > +%.1f%%)", ticker, vwap_dev, VWAP_MAX_ENTRY_PCT)
-                    return json.dumps({
-                        "success": False,
-                        "message": (f"{ticker} VWAP 이탈률 {vwap_dev:+.2f}% — "
-                                    f"+{VWAP_MAX_ENTRY_PCT:.1f}% 초과 진입 금지 (고점 추격)"),
-                    }, ensure_ascii=False)
-            else:
-                logger.warning("buy_stock: vwap_dev 미제공 — VWAP 가드레일 미적용 (%s)", ticker)
+            # RSI 과매수 가드레일 (코드 레벨) — RSI > 50이면 진입 금지
+            if rsi_value is not None and rsi_value > RSI_MAX_ENTRY:
+                logger.info("RSI 진입 차단: %s (RSI %.1f > %.1f)", ticker, rsi_value, RSI_MAX_ENTRY)
+                return json.dumps({
+                    "success": False,
+                    "message": (f"{ticker} RSI {rsi_value:.1f} — "
+                                f"{RSI_MAX_ENTRY:.0f} 초과 시 매수 금지 (중립 이상)"),
+                }, ensure_ascii=False)
+            elif rsi_value is None:
+                logger.warning("buy_stock: rsi_value 미제공 — RSI 가드레일 미적용 (%s)", ticker)
+
+            # BB 상단 가드레일
+            if bb_signal in ("upper_touch", "above_upper"):
+                logger.info("BB 상단 진입 차단: %s (bb_signal=%s)", ticker, bb_signal)
+                return json.dumps({
+                    "success": False,
+                    "message": f"{ticker} BB 상단 근접/이탈({bb_signal}) — 매수 금지 (고점 진입)",
+                }, ensure_ascii=False)
 
             # 종목당 일일 최대 매수 횟수 체크
             buy_count = _daily_buy_count.get(ticker, 0)
@@ -330,7 +375,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                             "total_cost": total_cost,
                             "dry_run": True,
                         }
-                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
+                        log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, bb_signal=bb_signal, rsi_value=rsi_value)
                 else:
                     result = {
                         "success": True,
@@ -346,7 +391,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                 result["reason"] = reason
                 result["total_cost"] = total_cost
                 if result["success"]:
-                    log_trade("BUY", ticker, qty, current_price, reason, True, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
+                    log_trade("BUY", ticker, qty, current_price, reason, True, stock_name, bb_signal=bb_signal, rsi_value=rsi_value)
 
             # 성공 시 일일 매수 횟수 업데이트
             if (result or {}).get("success"):
@@ -358,8 +403,8 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             _validate_ticker(ticker)
             qty = int(tool_input["quantity"])
             reason = tool_input.get("reason", "")
-            vwap_dev = tool_input.get("vwap_dev")
-            ha_pattern = tool_input.get("ha_pattern", "")
+            bb_signal = tool_input.get("bb_signal", "")
+            rsi_value = tool_input.get("rsi_value")
 
             if qty <= 0:
                 return json.dumps({"success": False, "message": "수량은 1 이상이어야 합니다."}, ensure_ascii=False)
@@ -408,12 +453,12 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "reason": reason,
                     "dry_run": True,
                 }
-                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, realized_profit, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
+                log_trade("SELL", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, realized_profit, bb_signal=bb_signal, rsi_value=rsi_value)
             else:
                 result = broker.sell_order(ticker, qty)
                 result["reason"] = reason
                 if result["success"]:
-                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name, realized_profit, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
+                    log_trade("SELL", ticker, qty, current_price, reason, True, stock_name, realized_profit, bb_signal=bb_signal, rsi_value=rsi_value)
 
             # 손절 매도 시 당일 재진입 블락 등록 (dry-run / 실거래 공통)
             if _is_stoploss_reason(reason) and (result or {}).get("success"):

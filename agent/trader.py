@@ -8,7 +8,7 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, GenerationConfig, Part, Content, Tool, grounding
 from agent.tools import GEMINI_TOOLS, execute_tool, _broker, set_sim_portfolio, get_sim_portfolio
 from data.trade_log import log_agent_run
-from config import GCP_PROJECT_ID, GCP_REGION, GEMINI_MODEL, MAX_POSITIONS, TAKE_PROFIT_PCT, STOP_LOSS_PCT
+from config import GCP_PROJECT_ID, GCP_REGION, GEMINI_MODEL, MAX_POSITIONS, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_HOLD_DAYS
 
 logger = logging.getLogger(__name__)
 
@@ -24,26 +24,20 @@ SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").format(
 MAX_TOOL_ROUNDS = 50
 
 _SCHEDULE_SLOTS = [
-    (dtime(9, 20),  "【1회차 — 진입】장 시작 20분 경과. Google 검색 후 Top10 스캔. VWAP +0.8%~+2.0%, HA 연속 양봉 확인 후 매수."),
-    (dtime(9, 27),  "【2회차 — 오전 핵심 진입 구간】TP/SL 먼저 확인. VWAP +0.8%~+2.0% 구간, HA 추세 확인 후 진입."),
-    (dtime(9, 34),  "【3회차 — 오전 핵심 진입 구간】TP/SL 먼저 확인. VWAP +0.8%~+2.0% 구간, HA 추세 확인 후 진입."),
-    (dtime(9, 41),  "【4회차 — 오전 핵심 진입 구간】TP/SL 먼저 확인. VWAP +0.8%~+2.0% 구간, HA 추세 확인 후 진입."),
-    (dtime(9, 48),  "【5회차 — 오전 핵심 진입 구간】TP/SL 먼저 확인. VWAP +0.8%~+2.0% 구간, HA 추세 확인 후 진입."),
-    (dtime(9, 55),  "【6회차 — 오전 핵심 진입 구간】TP/SL 먼저 확인. VWAP +0.8%~+2.0% 구간, HA 추세 확인 후 진입."),
-    (dtime(10, 2),  "【7회차 — 오전 후반 진입】TP/SL 먼저 확인. VWAP +0.8%~+2.0% + HA 강한상승 기준 유지. 기준 충족 시 진입 가능. 10:30 이전까지 진입 허용."),
-    (dtime(10, 9),  "【8회차 — 오전 후반 진입】TP/SL 먼저 확인. VWAP +0.8%~+2.0% + HA 강한상승 기준 유지. 기준 충족 시 진입 가능. 10:30 이전까지 진입 허용."),
-    (dtime(10, 16), "【9회차 — 후반 진입 마지막 기회】TP/SL 확인. VWAP +0.8% 이상 + HA 강한상승 필수. 10:30 이후 신규 진입 금지."),
-    (dtime(10, 23), "【10회차 — 마지막 진입 기회】TP/SL 확인. VWAP +0.8% 이상 + HA 강한상승 필수. 10:30 이후 신규 진입 금지."),
-    (dtime(10, 30), "【11회차 — 신규 진입 금지】TP/SL 확인. 보유 종목 관리에만 집중. 신규 매수 없음."),
-    (dtime(10, 37), "【12회차 — 신규 진입 금지】TP/SL 확인. 보유 종목 관리에만 집중. 신규 매수 없음."),
-    (dtime(10, 44), "【13회차 — 신규 진입 금지】TP/SL 확인. 보유 종목 관리에만 집중. 신규 매수 없음."),
-    (dtime(10, 51), "【14회차 — 신규 진입 금지】TP/SL 확인. 보유 종목 관리에만 집중. 신규 매수 없음."),
-    (dtime(10, 58), "【15회차 — 신규 진입 금지】TP/SL 확인. 보유 종목 관리에만 집중. 신규 매수 없음."),
-    (dtime(11, 5),  "【16회차 — 정리 점검】TP/SL 확인. 신규 진입 금지. 기존 포지션 청산 위주."),
-    (dtime(11, 12), "【17회차 — 정리 점검】TP/SL 확인. 신규 진입 금지. 기존 포지션 청산 위주."),
-    (dtime(11, 19), "【18회차 — 정리 점검】TP/SL 확인. 신규 진입 금지. 기존 포지션 청산 위주."),
-    (dtime(11, 26), "【19회차 — 청산 준비】TP/SL 확인. 신규 매수 금지. 수익 중인 종목도 청산 고려."),
-    (dtime(11, 30), "【20회차 — 강제 청산】신규 매수 절대 금지. 보유 전종목 즉시 전량 매도."),
+    (dtime(9,  0),  "【1회차 — 장 시작】포트폴리오 점검 + 신규 BB/RSI 신호 스캔. 어제 종가 기준 과매도 종목 탐색."),
+    (dtime(9,  30), "【2회차 — 오전 스캔】포트폴리오 TP/SL/보유기간 확인. BB 하단+RSI≤35+주봉 우상향 신호 탐색."),
+    (dtime(10, 0),  "【3회차 — 오전 스캔】포트폴리오 TP/SL/보유기간 확인. BB 하단+RSI≤35+주봉 우상향 신호 탐색."),
+    (dtime(10, 30), "【4회차 — 오전 스캔】포트폴리오 TP/SL/보유기간 확인. BB 하단+RSI≤35+주봉 우상향 신호 탐색."),
+    (dtime(11, 0),  "【5회차 — 오전 스캔】포트폴리오 TP/SL/보유기간 확인. BB 하단+RSI≤35+주봉 우상향 신호 탐색."),
+    (dtime(11, 30), "【6회차 — 점심 전 스캔】포트폴리오 TP/SL/보유기간 확인. 신규 신호 탐색."),
+    (dtime(12, 0),  "【7회차 — 오후 스캔】포트폴리오 TP/SL/보유기간 확인. BB 하단+RSI≤35+주봉 우상향 신호 탐색."),
+    (dtime(12, 30), "【8회차 — 오후 스캔】포트폴리오 TP/SL/보유기간 확인. 신규 신호 탐색."),
+    (dtime(13, 0),  "【9회차 — 오후 스캔】포트폴리오 TP/SL/보유기간 확인. BB 하단+RSI≤35+주봉 우상향 신호 탐색."),
+    (dtime(13, 30), "【10회차 — 오후 스캔】포트폴리오 TP/SL/보유기간 확인. 신규 신호 탐색."),
+    (dtime(14, 0),  "【11회차 — 오후 스캔】포트폴리오 TP/SL/보유기간 확인. BB 하단+RSI≤35+주봉 우상향 신호 탐색."),
+    (dtime(14, 30), "【12회차 — 오후 스캔】포트폴리오 TP/SL/보유기간 확인. 신규 신호 탐색."),
+    (dtime(15, 0),  "【13회차 — 마감 전】포트폴리오 TP/SL/보유기간 확인. 당일 마지막 신규 진입 기회."),
+    (dtime(15, 30), "【14회차 — 장 마감】포트폴리오 최종 확인. 손절 기준 미달 종목 즉시 처리. 신규 매수 금지."),
 ]
 
 
@@ -134,12 +128,14 @@ class TradingAgent:
             model = self._model_no_search
             user_message = (
                 f"[{today}] {run_ctx}\n"
-                "현재 포트폴리오를 점검하고 하이킨아시·VWAP 기준으로 매매를 결정합니다.\n\n"
+                "스윙 트레이딩 전략 — BB 하단+RSI≤35+주봉 우상향 기준으로 매매를 결정합니다.\n\n"
                 "1. get_portfolio()로 현재 포트폴리오를 확인하세요.\n"
                 f"2. 수익률 +{TAKE_PROFIT_PCT}% 이상인 종목은 즉시 전량 매도(익절)하세요.\n"
                 f"3. 수익률 -{STOP_LOSS_PCT}% 이하인 종목은 즉시 전량 매도(손절)하세요.\n"
-                "4. get_top_volume_stocks(n=30)으로 거래량 Top30 스캔 후 하이킨아시·VWAP 기준으로 진입 종목을 선정하세요.\n"
-                "5. 분석 결과를 간결하게 요약하세요."
+                f"4. 보유기간 {MAX_HOLD_DAYS}영업일 초과 종목은 즉시 전량 매도(기간 초과)하세요.\n"
+                "5. 보유 종목의 get_technical_indicators()로 BB 상단 근접(upper_touch/above_upper) 또는 RSI≥70인 경우 즉시 매도하세요.\n"
+                "6. get_top_volume_stocks(n=50) → 후보 선별 → get_technical_indicators()로 BB/RSI/주봉 추세 확인 후 진입을 결정하세요.\n"
+                "7. 분석 결과를 간결하게 요약하세요."
             )
             logger.info("에이전트 시작")
             try:
@@ -226,22 +222,12 @@ class TradingAgent:
             set_sim_portfolio(None)
 
     def summarize_session(self, session_log: list[dict]) -> str:
-        """5회 루프 결과를 바탕으로 세션 최종 요약 생성 (LLM 1회 호출)."""
+        """루프 결과를 바탕으로 세션 최종 요약 생성 (LLM 1회 호출)."""
         parts = []
         for entry in session_log:
             loop_num = entry["loop"]
-            ha_signals = entry.get("ha_signals", [])
             result = entry.get("result") or "신호 없음 — 스킵"
-
-            ha_text = ""
-            if ha_signals:
-                items = [
-                    f"{s['ticker']}({s.get('name', '')}) HA={s['pattern']} VWAP={s['vwap_dev']:+.1f}%"
-                    for s in ha_signals
-                ]
-                ha_text = f"\n  [HA/VWAP] {' | '.join(items)}"
-
-            parts.append(f"【루프 {loop_num}】{ha_text}\n{result[:600]}")
+            parts.append(f"【루프 {loop_num}】\n{result[:600]}")
 
         session_text = "\n\n".join(parts)
         prompt = (
@@ -249,7 +235,7 @@ class TradingAgent:
             f"{session_text}\n\n"
             "1. get_portfolio()로 최종 포트폴리오 상태를 확인하세요.\n"
             "2. 이번 세션의 매매 내역(매수/매도 종목, 이유)을 정리하세요.\n"
-            "3. 현재 보유 종목의 HA 패턴과 VWAP 상태를 간략히 평가하세요.\n"
+            "3. 현재 보유 종목의 BB 위치, RSI 상태를 간략히 평가하세요.\n"
             "4. 다음 세션에서 주의할 점을 한 줄로 작성하세요."
         )
         try:
