@@ -385,7 +385,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                         "total_cost": total_cost,
                         "dry_run": True,
                     }
-                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, vwap_dev=vwap_dev, ha_pattern=ha_pattern)
+                    log_trade("BUY", ticker, qty, current_price, f"[DRY-RUN] {reason}", False, stock_name, bb_signal=bb_signal, rsi_value=rsi_value)
             else:
                 result = broker.buy_order(ticker, qty)
                 result["reason"] = reason

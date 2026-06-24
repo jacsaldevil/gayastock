@@ -1,5 +1,5 @@
 """
-gayastock - 거래량 모멘텀 + VWAP 국내 주식 트레이딩 에이전트
+gayastock - BB+RSI 기반 스윙 트레이딩 에이전트
 실행: python main.py --once        # 1회 즉시 실행 (내부 루프 포함)
       python main.py --dry-run     # 시뮬레이션 모드
 """
@@ -59,8 +59,7 @@ def is_trading_day() -> bool:
 
 def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
                         max_positions: int) -> tuple[bool, list[dict]]:
-    """Python 사전 체크. (needs_action, ha_signals) 반환."""
-    ha_signals = []
+    """Python 사전 체크 — 스윙 트레이딩용. (needs_action, []) 반환."""
     portfolio = broker.get_balance()
     holdings = portfolio.get("holdings", [])
 
@@ -68,40 +67,15 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
         rate = h.get("profit_loss_rate", 0)
         if rate >= take_profit_pct or rate <= -stop_loss_pct:
             logger.info("TP/SL 조건 해당: %s %.2f%% → Gemini 호출", h.get("ticker"), rate)
-            return True, ha_signals
+            return True, []
 
     if len(holdings) < max_positions:
         logger.info("빈 슬롯 있음 (%d/%d) → Gemini 호출", len(holdings), max_positions)
-        return True, ha_signals
+        return True, []
 
-    # 포지션 풀 — 보유 종목 HA/VWAP 이탈 체크 (매도 신호 감지)
-    for h in holdings:
-        ticker = h.get("ticker", "")
-        if not ticker:
-            continue
-        try:
-            result = broker.get_minute_candles(ticker)
-            candles = result.get("candles", [])
-            vwap_dev = result.get("vwap_deviation_pct", 0)
-            if not candles:
-                continue
-            latest = candles[-1]
-            signal = {
-                "ticker": ticker,
-                "name": result.get("name", ""),
-                "pattern": latest.get("pattern", ""),
-                "vwap_dev": round(float(vwap_dev), 2),
-                "bullish": latest.get("bullish", True),
-            }
-            ha_signals.append(signal)
-            if vwap_dev < 0:
-                logger.info("VWAP 이탈: %s vwap=%.2f%% → Gemini 호출", ticker, vwap_dev)
-                return True, ha_signals
-        except Exception as e:
-            logger.warning("HA/VWAP 체크 실패 %s: %s", ticker, e)
-
-    logger.info("포지션 풀, TP/SL 없음, HA/VWAP 정상 → Gemini 스킵")
-    return False, ha_signals
+    # 스윙 트레이딩: 포지션 풀이어도 BB/RSI 청산 신호 확인을 위해 항상 Gemini 호출
+    logger.info("포지션 풀, TP/SL 없음 — BB/RSI 청산 신호 확인을 위해 Gemini 호출")
+    return True, []
 
 
 def run_trading():
@@ -153,7 +127,7 @@ def run_trading():
             sim_dt = _dt(check.year, check.month, check.day,
                          first_slot.hour, first_slot.minute,
                          tzinfo=now_kst.tzinfo)
-            logger.info("DRY-RUN 장외: sim_datetime=%s (1회차 강제)", sim_dt.strftime("%Y-%m-%d %H:%M"))
+            logger.info("DRY-RUN 장외: sim_datetime=%s (09:00 1회차 강제)", sim_dt.strftime("%Y-%m-%d %H:%M"))
         else:
             logger.info("DRY-RUN 장중: 실제 시각 기준 회차 사용 (%s)", now_kst.strftime("%H:%M"))
 
@@ -175,8 +149,8 @@ def run_trading():
 
     for i in range(INNER_LOOP_COUNT):
         logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
-        loop_entry: dict = {"loop": i + 1, "ha_signals": [], "result": None}
-        loop_p: dict = {"loop": i + 1, "status": "checking", "ha_signals": [], "needs_action": False}
+        loop_entry: dict = {"loop": i + 1, "result": None}
+        loop_p: dict = {"loop": i + 1, "status": "checking", "needs_action": False}
         progress["current_loop"] = i + 1
         progress["loops"].append(loop_p)
         _write_progress(progress)
@@ -185,11 +159,9 @@ def run_trading():
             needs_action = True
         else:
             try:
-                needs_action, ha_signals = _check_needs_action(
+                needs_action, _ = _check_needs_action(
                     broker, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
                 )
-                loop_entry["ha_signals"] = ha_signals
-                loop_p["ha_signals"] = ha_signals
             except Exception as e:
                 logger.warning("사전 체크 오류 (Gemini 폴백): %s", e)
                 needs_action = True
