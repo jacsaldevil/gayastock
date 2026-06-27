@@ -110,7 +110,7 @@ def _get_initial_capital() -> int:
 
 
 def _get_sim_datetime(live: bool):
-    """시뮬(not live): 최근 거래일의 1회차(09:20) 시간으로 강제. 실전: None(실제 시각)."""
+    """시뮬(not live): 최근 거래일의 1회차(09:00) 시간으로 강제. 실전: None(실제 시각)."""
     if live:
         return None
     from agent.trader import _SCHEDULE_SLOTS
@@ -450,6 +450,7 @@ def _run_agent_bg(sim_id: str, live: bool):
     from agent.tools import _broker
     from data.trade_log import log_agent_run
 
+    prev_dry_run = os.environ.get("DRY_RUN")
     if not live:
         os.environ["DRY_RUN"] = "true"
 
@@ -474,6 +475,7 @@ def _run_agent_bg(sim_id: str, live: bool):
         broker = _broker()
         session_log: list[dict] = []
         all_buy_tickers: list[str] = []
+        sim_portfolio: dict | None = None
 
         for i in range(INNER_LOOP_COUNT):
             loop_entry: dict = {"loop": i + 1, "ha_signals": [], "result": None, "tool_log": []}
@@ -506,11 +508,14 @@ def _run_agent_bg(sim_id: str, live: bool):
                     _sim_save_data(sim_id, data)
 
                 result = agent.run(
+                    sim_portfolio_in=sim_portfolio,
                     cancel_pending=(i == 0),
                     skip_log=True,
                     sim_datetime=_get_sim_datetime(live),
                     on_tool_call=_on_tool_call,
                 )
+                if not live:
+                    sim_portfolio = agent.sim_portfolio_out
                 loop_entry["result"] = result
                 loop_p["result_preview"] = (result or "")[:300]
                 all_buy_tickers.extend(agent.buy_tickers)
@@ -528,12 +533,15 @@ def _run_agent_bg(sim_id: str, live: bool):
         # 세션 최종 요약
         progress["status"] = "summarizing"
         _write_session_progress(progress)
-        final_summary = agent.summarize_session(session_log)
+        final_summary = agent.summarize_session(session_log, sim_portfolio=sim_portfolio if not live else None)
         data["final_summary"] = final_summary
-        try:
-            portfolio_snapshot = broker.get_balance()
-        except Exception:
-            portfolio_snapshot = {}
+        if not live and sim_portfolio is not None:
+            portfolio_snapshot = sim_portfolio
+        else:
+            try:
+                portfolio_snapshot = broker.get_balance()
+            except Exception:
+                portfolio_snapshot = {}
         log_agent_run(None, final_summary, portfolio_snapshot,
                       list(dict.fromkeys(all_buy_tickers)), session_log)
 
@@ -541,7 +549,10 @@ def _run_agent_bg(sim_id: str, live: bool):
         data["error"] = str(e)
         progress["status"] = "done"
     finally:
-        os.environ["DRY_RUN"] = "false"
+        if prev_dry_run is None:
+            os.environ.pop("DRY_RUN", None)
+        else:
+            os.environ["DRY_RUN"] = prev_dry_run
         finished_at = get_now_kst().isoformat()
         data["status"] = "done"
         data["finished_at"] = finished_at
@@ -1160,4 +1171,3 @@ elif page == "에이전트 로그":
 
             st.markdown("**에이전트 판단 요약**")
             st.markdown(summary)
-

@@ -42,10 +42,18 @@ _SCHEDULE_SLOTS = [
 ]
 
 
-def _get_run_context(now: datetime) -> str:
+def _get_run_slot(now: datetime) -> tuple[int, str]:
     mins = now.hour * 60 + now.minute
-    best = min(_SCHEDULE_SLOTS, key=lambda s: abs(s[0].hour * 60 + s[0].minute - mins))
-    return best[1]
+    indexed_slots = list(enumerate(_SCHEDULE_SLOTS))
+    best_index, best = min(
+        indexed_slots,
+        key=lambda s: abs(s[1][0].hour * 60 + s[1][0].minute - mins),
+    )
+    return best_index, best[1]
+
+
+def _get_run_context(now: datetime) -> str:
+    return _get_run_slot(now)[1]
 
 
 def _make_search_tool():
@@ -124,18 +132,33 @@ class TradingAgent:
 
             now = sim_datetime or get_now_kst()
             today = now.strftime("%Y-%m-%d %H:%M")
-            run_ctx = _get_run_context(now)
+            slot_index, run_ctx = _get_run_slot(now)
 
-            model = self._model_no_search
+            model = self._model_with_search if slot_index == 0 else self._model_no_search
+            search_note = "Google Search grounding 사용" if slot_index == 0 else "검색 없이 실행"
+            watchlist_note = ""
+            scan_instruction = (
+                "6. get_top_volume_stocks(n=50) → 후보 선별 → get_technical_indicators()로 BB/RSI/주봉 추세 확인 후 진입을 결정하세요.\n"
+            )
+            if watchlist:
+                tickers = ", ".join(watchlist)
+                watchlist_note = f"\n지정 분석 종목: {tickers}\n"
+                scan_instruction = (
+                    f"6. 사용자가 지정한 종목({tickers})만 get_technical_indicators()로 "
+                    "BB/RSI/주봉 추세를 확인한 뒤 진입을 결정하세요. 지정 종목 외 신규 후보 스캔은 하지 마세요.\n"
+                )
+
             user_message = (
                 f"[{today}] {run_ctx}\n"
+                f"{search_note}\n"
                 "스윙 트레이딩 전략 — BB 하단+RSI≤35+주봉 우상향 기준으로 매매를 결정합니다.\n\n"
+                f"{watchlist_note}"
                 "1. get_portfolio()로 현재 포트폴리오를 확인하세요.\n"
                 f"2. 수익률 +{TAKE_PROFIT_PCT}% 이상인 종목은 즉시 전량 매도(익절)하세요.\n"
                 f"3. 수익률 -{STOP_LOSS_PCT}% 이하인 종목은 즉시 전량 매도(손절)하세요.\n"
                 f"4. 보유기간 {MAX_HOLD_DAYS}영업일 초과 종목은 즉시 전량 매도(기간 초과)하세요.\n"
                 "5. 보유 종목의 get_technical_indicators()로 BB 상단 근접(upper_touch/above_upper) 또는 RSI≥70인 경우 즉시 매도하세요.\n"
-                "6. get_top_volume_stocks(n=50) → 후보 선별 → get_technical_indicators()로 BB/RSI/주봉 추세 확인 후 진입을 결정하세요.\n"
+                f"{scan_instruction}"
                 "7. 분석 결과를 간결하게 요약하세요."
             )
             logger.info("에이전트 시작")
@@ -222,7 +245,7 @@ class TradingAgent:
             self.sim_portfolio_out = get_sim_portfolio()
             set_sim_portfolio(None)
 
-    def summarize_session(self, session_log: list[dict]) -> str:
+    def summarize_session(self, session_log: list[dict], sim_portfolio: dict | None = None) -> str:
         """루프 결과를 바탕으로 세션 최종 요약 생성 (LLM 1회 호출)."""
         parts = []
         for entry in session_log:
@@ -239,6 +262,7 @@ class TradingAgent:
             "3. 현재 보유 종목의 BB 위치, RSI 상태를 간략히 평가하세요.\n"
             "4. 다음 세션에서 주의할 점을 한 줄로 작성하세요."
         )
+        set_sim_portfolio(sim_portfolio)
         try:
             chat = self._model_no_search.start_chat(response_validation=False)
             response = chat.send_message(prompt)
@@ -263,3 +287,5 @@ class TradingAgent:
         except Exception as e:
             logger.error("세션 요약 LLM 호출 실패: %s", e)
             return "세션 요약 실패: " + str(e)
+        finally:
+            set_sim_portfolio(None)

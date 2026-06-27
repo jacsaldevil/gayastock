@@ -78,7 +78,7 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
     return True, []
 
 
-def run_trading():
+def run_trading(watchlist: list[str] | None = None):
     dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     if not dry_run and not is_trading_day() and os.environ.get("FORCE_RUN") != "true":
         logger.info("오늘은 휴장일(공휴일/주말)입니다. 건너뜁니다.")
@@ -146,6 +146,7 @@ def run_trading():
 
     session_log: list[dict] = []
     all_buy_tickers: list[str] = []
+    sim_portfolio: dict | None = None
 
     for i in range(INNER_LOOP_COUNT):
         logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
@@ -171,10 +172,14 @@ def run_trading():
             loop_p["status"] = "llm_running"
             _write_progress(progress)
             result = agent.run(
+                watchlist=watchlist,
+                sim_portfolio_in=sim_portfolio,
                 cancel_pending=(i == 0),
                 skip_log=True,
                 sim_datetime=sim_dt,
             )
+            if dry_run:
+                sim_portfolio = agent.sim_portfolio_out
             loop_entry["result"] = result
             loop_p["result_preview"] = (result or "")[:300]
             all_buy_tickers.extend(agent.buy_tickers)
@@ -193,14 +198,17 @@ def run_trading():
     _write_progress(progress)
     logger.info("=" * 60)
     logger.info("세션 최종 요약 생성 중...")
-    final_summary = agent.summarize_session(session_log)
+    final_summary = agent.summarize_session(session_log, sim_portfolio=sim_portfolio if dry_run else None)
     logger.info("최종 요약:\n%s", final_summary)
-    try:
-        portfolio_snapshot = broker.get_balance()
-    except Exception:
-        portfolio_snapshot = {}
+    if dry_run and sim_portfolio is not None:
+        portfolio_snapshot = sim_portfolio
+    else:
+        try:
+            portfolio_snapshot = broker.get_balance()
+        except Exception:
+            portfolio_snapshot = {}
     log_agent_run(
-        watchlist=None,
+        watchlist=watchlist,
         summary=final_summary,
         portfolio_snapshot=portfolio_snapshot,
         buy_tickers=list(dict.fromkeys(all_buy_tickers)),
@@ -234,7 +242,7 @@ def main():
         os.environ["FORCE_RUN"] = "true"
 
     if args.once:
-        run_trading()
+        run_trading(watchlist=args.tickers)
         return
 
     logger.info("스케줄러 모드 — Cloud Run Job 방식 권장, 직접 루프는 개발용")

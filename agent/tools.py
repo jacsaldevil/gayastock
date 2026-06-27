@@ -79,6 +79,56 @@ def _validate_ticker(ticker: str):
         raise ValueError(f"유효하지 않은 종목코드: {ticker!r} (6자리 숫자여야 합니다)")
 
 
+def _business_days_between(start_date: str, end_date) -> int:
+    """KST 기준 보유 영업일 수 계산 (시작일 제외, 종료일 포함)."""
+    from datetime import date, timedelta
+
+    try:
+        start = date.fromisoformat(start_date)
+    except (TypeError, ValueError):
+        return 0
+    if start >= end_date:
+        return 0
+
+    try:
+        import holidays
+        kr_holidays = holidays.SouthKorea(years=range(start.year, end_date.year + 1))
+    except Exception:
+        kr_holidays = set()
+
+    days = 0
+    cursor = start + timedelta(days=1)
+    while cursor <= end_date:
+        if cursor.weekday() < 5 and cursor not in kr_holidays:
+            days += 1
+        cursor += timedelta(days=1)
+    return days
+
+
+def _refresh_sim_portfolio_totals() -> None:
+    """dry-run 가상 포트폴리오의 평가액/손익 합계를 현재 보유 상태와 동기화."""
+    if _sim_portfolio is None:
+        return
+
+    holdings_eval = 0
+    profit_loss = 0
+    for holding in _sim_portfolio.get("holdings", []):
+        quantity = int(holding.get("quantity", 0) or 0)
+        current_price = float(holding.get("current_price", 0) or 0)
+        avg_price = float(holding.get("avg_price", 0) or 0)
+        holding_eval = int(current_price * quantity)
+        holdings_eval += holding_eval
+        if avg_price > 0:
+            holding_profit = int((current_price - avg_price) * quantity)
+            holding["profit_loss_amt"] = holding_profit
+            holding["profit_loss_rate"] = round((current_price - avg_price) / avg_price * 100, 2)
+            profit_loss += holding_profit
+
+    _sim_portfolio["holdings_eval"] = holdings_eval
+    _sim_portfolio["total_eval"] = int(_sim_portfolio.get("cash", 0) or 0) + holdings_eval
+    _sim_portfolio["profit_loss"] = profit_loss
+
+
 # Vertex AI Tool 정의 (dict 기반 — SDK 버전 무관하게 동작)
 GEMINI_TOOLS = Tool(
     function_declarations=[
@@ -242,7 +292,14 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             if _is_dry_run():
                 global _sim_portfolio
                 if _sim_portfolio is None:
-                    _sim_portfolio = {"cash": 1_000_000, "holdings": [], "total_eval": 1_000_000, "profit_loss": 0}
+                    _sim_portfolio = {
+                        "cash": 1_000_000,
+                        "holdings": [],
+                        "holdings_eval": 0,
+                        "total_eval": 1_000_000,
+                        "profit_loss": 0,
+                    }
+                _refresh_sim_portfolio_totals()
                 result = _sim_portfolio
             else:
                 result = broker.get_balance()
@@ -251,7 +308,6 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
             try:
                 from data.trade_log import get_trades
                 from data.utils import get_now_kst
-                from datetime import date as _date
                 today = get_now_kst().date()
                 # 오래된 순으로 정렬해 포지션 진입일 추적
                 all_trades = sorted(get_trades(limit=1000), key=lambda t: t.get("ts", ""))
@@ -273,7 +329,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                 for h in result.get("holdings", []):
                     tk = h["ticker"]
                     if tk in position_open_date:
-                        h["hold_days"] = (_date.today() - _date.fromisoformat(position_open_date[tk])).days
+                        h["hold_days"] = _business_days_between(position_open_date[tk], today)
                         h["buy_date"] = position_open_date[tk]
                     else:
                         h["hold_days"] = 0
@@ -363,7 +419,9 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                                 "avg_price": current_price,
                                 "current_price": current_price,
                                 "profit_loss_rate": 0.0,
+                                "profit_loss_amt": 0,
                             })
+                        _refresh_sim_portfolio_totals()
                         result = {
                             "success": True,
                             "order_no": "DRY-RUN",
@@ -440,6 +498,7 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                             _sim_portfolio["holdings"].remove(h)
                         else:
                             h["quantity"] -= qty
+                    _refresh_sim_portfolio_totals()
                     message = (
                         f"[시뮬레이션] 매도 {ticker} {qty}주 @ {current_price:,}원 = {proceeds:,}원 "
                         f"(가상포트폴리오 반영 — 잔여 예수금 {_sim_portfolio['cash']:,}원)"
