@@ -138,28 +138,29 @@ class TradingAgent:
             search_note = "Google Search grounding 사용" if slot_index == 0 else "검색 없이 실행"
             watchlist_note = ""
             scan_instruction = (
-                "6. get_top_volume_stocks(n=50) → 후보 선별 → get_technical_indicators()로 BB/RSI/주봉 추세 확인 후 진입을 결정하세요.\n"
+                "7. 시장 레짐이 허용할 때만 get_top_volume_stocks(n=50) → 후보 선별 → get_technical_indicators()로 BB/RSI/주봉 추세 확인 후 진입을 결정하세요.\n"
             )
             if watchlist:
                 tickers = ", ".join(watchlist)
                 watchlist_note = f"\n지정 분석 종목: {tickers}\n"
                 scan_instruction = (
-                    f"6. 사용자가 지정한 종목({tickers})만 get_technical_indicators()로 "
+                    f"7. 시장 레짐이 허용할 때만 사용자가 지정한 종목({tickers})만 get_technical_indicators()로 "
                     "BB/RSI/주봉 추세를 확인한 뒤 진입을 결정하세요. 지정 종목 외 신규 후보 스캔은 하지 마세요.\n"
                 )
 
             user_message = (
                 f"[{today}] {run_ctx}\n"
                 f"{search_note}\n"
-                "스윙 트레이딩 전략 — BB 하단+RSI≤35+주봉 우상향 기준으로 매매를 결정합니다.\n\n"
+                "중기 트레이딩 전략 — 시장 레짐 확인 후 BB 하단+RSI≤35+주봉 우상향 기준으로 매매를 결정합니다.\n\n"
                 f"{watchlist_note}"
-                "1. get_portfolio()로 현재 포트폴리오를 확인하세요.\n"
-                f"2. 수익률 +{TAKE_PROFIT_PCT}% 이상인 종목은 즉시 전량 매도(익절)하세요.\n"
-                f"3. 수익률 -{STOP_LOSS_PCT}% 이하인 종목은 즉시 전량 매도(손절)하세요.\n"
-                f"4. 보유기간 {MAX_HOLD_DAYS}영업일 초과 종목은 즉시 전량 매도(기간 초과)하세요.\n"
-                "5. 보유 종목의 get_technical_indicators()로 BB 상단 근접(upper_touch/above_upper) 또는 RSI≥70인 경우 즉시 매도하세요.\n"
+                "1. get_market_regime()으로 시장 레짐을 확인하세요. buy_allowed=false이면 신규 매수는 금지입니다.\n"
+                "2. get_portfolio()로 현재 포트폴리오를 확인하세요.\n"
+                f"3. 수익률 +{TAKE_PROFIT_PCT}% 이상인 종목은 30~50% 부분익절하고 잔여는 추세 유지 시 보유하세요.\n"
+                f"4. 수익률 -{STOP_LOSS_PCT}% 이하인 종목은 즉시 전량 매도(손절)하세요.\n"
+                f"5. 보유기간 {MAX_HOLD_DAYS}영업일 초과 종목은 주봉 추세/BB/RSI를 재점검해 추세 둔화 시 청산하세요.\n"
+                "6. 보유 종목의 get_technical_indicators()로 BB 상단 근접(upper_touch/above_upper) 또는 RSI≥70인 경우 부분/전량 매도하세요.\n"
                 f"{scan_instruction}"
-                "7. 분석 결과를 간결하게 요약하세요."
+                "8. 분석 결과를 간결하게 요약하세요."
             )
             logger.info("에이전트 시작")
             try:

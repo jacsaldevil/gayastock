@@ -24,13 +24,17 @@ KIS_BASE_URL = (
 MAX_BUY_AMOUNT = int(os.getenv("MAX_BUY_AMOUNT", "500000"))
 MAX_POSITIONS = int(os.getenv("MAX_POSITIONS", "3"))
 INITIAL_CAPITAL = int(os.getenv("INITIAL_CAPITAL") or "0")  # 계좌 이체 원금 (0이면 미설정)
-TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "8.0"))   # 스윙 트레이딩 목표가
-STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "5.0"))       # 스윙 트레이딩 손절
+TAKE_PROFIT_PCT = float(os.getenv("TAKE_PROFIT_PCT", "10.0"))  # 중기 부분익절 기준
+STOP_LOSS_PCT = float(os.getenv("STOP_LOSS_PCT", "7.0"))       # 중기 손절
 
-# 스윙 트레이딩 기술적 지표 설정
+# 중기 트레이딩 기술적 지표 설정
 BB_PERIOD = int(os.getenv("BB_PERIOD", "20"))          # 볼린저밴드 기간 (일봉)
 RSI_PERIOD = int(os.getenv("RSI_PERIOD", "14"))        # RSI 기간 (일봉)
-MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "10"))  # 최대 보유 영업일 수
+MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "40"))  # 최대 보유 영업일 수
+
+# 시장 레짐 필터 (KODEX 200을 코스피 대형주 프록시로 사용)
+MARKET_PROXY_TICKER = os.getenv("MARKET_PROXY_TICKER", "069500")
+MARKET_CRASH_PCT = float(os.getenv("MARKET_CRASH_PCT", "-3.0"))
 
 # RSI 진입 가드레일 (코드 레벨 강제)
 RSI_MAX_ENTRY = float(os.getenv("RSI_MAX_ENTRY", "50.0"))  # 초과 시 매수 금지 (중립 이상)

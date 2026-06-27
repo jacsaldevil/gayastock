@@ -9,7 +9,10 @@ import time
 import requests
 from datetime import datetime, timedelta
 from data.utils import get_now_kst
-from config import KIS_APP_KEY, KIS_APP_SECRET, KIS_ACCOUNT_NO, KIS_BASE_URL, KIS_MOCK
+from config import (
+    KIS_APP_KEY, KIS_APP_SECRET, KIS_ACCOUNT_NO, KIS_BASE_URL, KIS_MOCK,
+    MARKET_PROXY_TICKER, MARKET_CRASH_PCT,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -539,6 +542,59 @@ class KISBroker:
             tech["weekly_trend"] = "unknown"
 
         return {"ticker": ticker, **tech}
+
+    def get_market_regime(self, ticker: str = MARKET_PROXY_TICKER) -> dict:
+        """코스피 대형주 프록시(KODEX 200)로 시장 레짐을 판별한다."""
+        daily = self.get_daily_candles(ticker, days=80)
+        if len(daily) < 60:
+            return {
+                "ticker": ticker,
+                "status": "unknown",
+                "buy_allowed": False,
+                "recommended_buy_scale": 0.0,
+                "reason": f"시장 데이터 부족: {len(daily)}개",
+            }
+
+        latest = daily[-1]
+        close = latest["close"]
+        ma20 = sum(c["close"] for c in daily[-20:]) / 20
+        ma60 = sum(c["close"] for c in daily[-60:]) / 60
+        change_rate = latest.get("change_rate", 0)
+        if not change_rate and len(daily) >= 2 and daily[-2]["close"]:
+            change_rate = (close - daily[-2]["close"]) / daily[-2]["close"] * 100
+
+        if change_rate <= MARKET_CRASH_PCT:
+            status = "crash"
+            buy_allowed = False
+            scale = 0.0
+            reason = f"시장 급락({change_rate:.2f}% ≤ {MARKET_CRASH_PCT:.2f}%) — 신규 매수 금지"
+        elif close < ma60:
+            status = "risk_off"
+            buy_allowed = False
+            scale = 0.0
+            reason = "60일선 하회 — 중기 하락 위험으로 신규 매수 금지"
+        elif close < ma20:
+            status = "caution"
+            buy_allowed = True
+            scale = 0.5
+            reason = "20일선 하회/60일선 상회 — 절반 수량만 허용"
+        else:
+            status = "risk_on"
+            buy_allowed = True
+            scale = 1.0
+            reason = "20일선·60일선 상회 — 정상 매수 가능"
+
+        return {
+            "ticker": ticker,
+            "status": status,
+            "buy_allowed": buy_allowed,
+            "recommended_buy_scale": scale,
+            "close": round(close, 2),
+            "ma20": round(ma20, 2),
+            "ma60": round(ma60, 2),
+            "change_rate": round(change_rate, 2),
+            "reason": reason,
+        }
 
     def get_financial_summary(self, ticker: str) -> dict:
         """재무 요약 — 손익계산서 + 재무비율 통합 반환 (LLM용 단일 호출)"""

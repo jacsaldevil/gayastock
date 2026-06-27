@@ -5,7 +5,7 @@ import os
 import re
 from vertexai.generative_models import Tool, FunctionDeclaration
 from data.trade_log import log_trade
-from config import RSI_MAX_ENTRY, MAX_DAILY_BUY_PER_TICKER
+from config import RSI_MAX_ENTRY, MAX_DAILY_BUY_PER_TICKER, MARKET_PROXY_TICKER
 
 logger = logging.getLogger(__name__)
 
@@ -186,11 +186,29 @@ GEMINI_TOOLS = Tool(
             },
         ),
         FunctionDeclaration(
+            name="get_market_regime",
+            description=(
+                "코스피 대형주 프록시(KODEX 200)로 시장 레짐을 확인합니다. "
+                "매수 전 반드시 호출하세요. status는 risk_on/caution/risk_off/crash/unknown 중 하나이며, "
+                "buy_allowed=false이면 신규 매수 금지, caution이면 recommended_buy_scale에 맞춰 절반 수량만 매수하세요."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ticker": {
+                        "type": "string",
+                        "description": f"시장 프록시 6자리 코드 (기본 {MARKET_PROXY_TICKER}=KODEX 200)",
+                    },
+                },
+            },
+        ),
+        FunctionDeclaration(
             name="buy_stock",
             description=(
                 "주식을 매수합니다. "
-                "매수 전 get_technical_indicators로 BB 하단 근접(lower_touch/below_lower) + RSI≤35 + 주봉 우상향(up)을 반드시 확인하세요. "
-                "포지션 사이징: 가용예수금 × 30~50% ÷ 남은 슬롯 수로 계산하세요."
+                "매수 전 get_market_regime의 buy_allowed=true와 "
+                "get_technical_indicators의 BB 하단 근접(lower_touch/below_lower) + RSI≤35 + 주봉 우상향(up)을 반드시 확인하세요. "
+                "포지션 사이징: risk_on은 가용예수금 × 30~40% ÷ 남은 슬롯 수, caution은 그 절반 이하로 계산하세요."
             ),
             parameters={
                 "type": "object",
@@ -278,6 +296,11 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
         elif tool_name == "get_technical_indicators":
             _validate_ticker(tool_input["ticker"])
             result = broker.get_technical_indicators(tool_input["ticker"])
+
+        elif tool_name == "get_market_regime":
+            ticker = tool_input.get("ticker") or MARKET_PROXY_TICKER
+            _validate_ticker(ticker)
+            result = broker.get_market_regime(ticker)
 
         elif tool_name == "get_financial_summary":
             _validate_ticker(tool_input["ticker"])
@@ -382,6 +405,15 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "success": False,
                     "message": (f"{ticker} 당일 {buy_count}회 매수 완료 — "
                                 f"최대 {MAX_DAILY_BUY_PER_TICKER}회 초과 금지"),
+                }, ensure_ascii=False)
+
+            market_regime = broker.get_market_regime()
+            if not market_regime.get("buy_allowed", False):
+                logger.info("시장 레짐 매수 차단: %s", market_regime)
+                return json.dumps({
+                    "success": False,
+                    "message": f"시장 레짐 {market_regime.get('status')} — {market_regime.get('reason')}",
+                    "market_regime": market_regime,
                 }, ensure_ascii=False)
 
             price_info = broker.get_current_price(ticker)
