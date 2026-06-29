@@ -34,10 +34,10 @@ MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "40"))  # 최대 보유 영업일
 
 # 시장 레짐 필터 (KODEX 200을 코스피 대형주 프록시로 사용)
 MARKET_PROXY_TICKER = os.getenv("MARKET_PROXY_TICKER", "069500")
-MARKET_CRASH_PCT = float(os.getenv("MARKET_CRASH_PCT", "-3.0"))
+MARKET_CRASH_PCT = float(os.getenv("MARKET_CRASH_PCT", "-4.0"))
 
 # RSI 진입 가드레일 (코드 레벨 강제)
-RSI_MAX_ENTRY = float(os.getenv("RSI_MAX_ENTRY", "50.0"))  # 초과 시 매수 금지 (중립 이상)
+RSI_MAX_ENTRY = float(os.getenv("RSI_MAX_ENTRY", "60.0"))  # 초과 시 매수 금지 (과열 진입 방지)
 MAX_DAILY_BUY_PER_TICKER = int(os.getenv("MAX_DAILY_BUY_PER_TICKER", "1"))  # 종목당 하루 최대 매수 횟수
 
 # 내부 루프 설정 (스케줄러 1회 호출당 반복 횟수 / 슬립)

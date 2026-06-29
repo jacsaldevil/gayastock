@@ -207,7 +207,8 @@ GEMINI_TOOLS = Tool(
             description=(
                 "주식을 매수합니다. "
                 "매수 전 get_market_regime의 buy_allowed=true와 "
-                "get_technical_indicators의 BB 하단 근접(lower_touch/below_lower) + RSI≤35 + 주봉 우상향(up)을 반드시 확인하세요. "
+                "get_technical_indicators의 주봉 우상향(up)을 반드시 확인하세요. "
+                "진입은 과매도형(BB 하단+RSI≤35) 또는 주도주 눌림목형(BB middle/lower_touch + RSI≤55) 중 하나여야 합니다. "
                 "포지션 사이징: risk_on은 가용예수금 × 30~40% ÷ 남은 슬롯 수, caution은 그 절반 이하로 계산하세요."
             ),
             parameters={
@@ -378,13 +379,13 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "message": f"{ticker} 당일 손절 종목 — 재진입 금지 (반복 손실 방지)",
                 }, ensure_ascii=False)
 
-            # RSI 과매수 가드레일 (코드 레벨) — RSI > 50이면 진입 금지
+            # RSI 과열 가드레일 (코드 레벨) — RSI > RSI_MAX_ENTRY이면 진입 금지
             if rsi_value is not None and rsi_value > RSI_MAX_ENTRY:
                 logger.info("RSI 진입 차단: %s (RSI %.1f > %.1f)", ticker, rsi_value, RSI_MAX_ENTRY)
                 return json.dumps({
                     "success": False,
                     "message": (f"{ticker} RSI {rsi_value:.1f} — "
-                                f"{RSI_MAX_ENTRY:.0f} 초과 시 매수 금지 (중립 이상)"),
+                                f"{RSI_MAX_ENTRY:.0f} 초과 시 매수 금지 (과열 진입 방지)"),
                 }, ensure_ascii=False)
             elif rsi_value is None:
                 logger.warning("buy_stock: rsi_value 미제공 — RSI 가드레일 미적용 (%s)", ticker)
@@ -414,6 +415,41 @@ def execute_tool(tool_name: str, tool_input: dict) -> str:
                     "success": False,
                     "message": f"시장 레짐 {market_regime.get('status')} — {market_regime.get('reason')}",
                     "market_regime": market_regime,
+                }, ensure_ascii=False)
+
+            technicals = broker.get_technical_indicators(ticker)
+            if technicals.get("error"):
+                return json.dumps({
+                    "success": False,
+                    "message": f"{ticker} 기술적 지표 확인 실패 — {technicals['error']}",
+                    "technicals": technicals,
+                }, ensure_ascii=False)
+            actual_bb = technicals.get("bb_position", "")
+            actual_rsi = float(technicals.get("rsi", 100) or 100)
+            weekly_trend = technicals.get("weekly_trend", "unknown")
+            regime_status = market_regime.get("status")
+
+            deep_pullback = (
+                regime_status in ("caution", "risk_on")
+                and actual_bb in ("below_lower", "lower_touch")
+                and actual_rsi <= 35
+                and weekly_trend == "up"
+            )
+            leader_pullback = (
+                regime_status == "risk_on"
+                and actual_bb in ("middle", "lower_touch")
+                and 35 < actual_rsi <= 55
+                and weekly_trend == "up"
+            )
+            if not (deep_pullback or leader_pullback):
+                return json.dumps({
+                    "success": False,
+                    "message": (
+                        f"{ticker} 진입 시나리오 미충족 — "
+                        f"regime={regime_status}, bb={actual_bb}, rsi={actual_rsi:.1f}, weekly={weekly_trend}"
+                    ),
+                    "market_regime": market_regime,
+                    "technicals": technicals,
                 }, ensure_ascii=False)
 
             price_info = broker.get_current_price(ticker)
