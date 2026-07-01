@@ -1,6 +1,7 @@
 """Gemini 기반 주식 트레이딩 에이전트 (Vertex AI)"""
 import logging
 import os
+import json
 from datetime import datetime, time as dtime
 from pathlib import Path
 from data.utils import get_now_kst
@@ -195,10 +196,15 @@ class TradingAgent:
                         logger.info(f"Tool: {fn.name} | {args}")
                         result_str = execute_tool(fn.name, args)
                         logger.info(f"결과: {result_str[:200]}")
+                        try:
+                            result_success = json.loads(result_str).get("success")
+                        except json.JSONDecodeError:
+                            result_success = None
                         self.tool_call_log.append({
                             "round": i + 1,
                             "tool": fn.name,
                             "args": args,
+                            "success": result_success,
                             "result_preview": result_str[:400],
                         })
                         if on_tool_call:
@@ -228,11 +234,13 @@ class TradingAgent:
                 final = "분석 완료 (도구 호출 한도 도달 — 최종 텍스트 응답 없음)"
             logger.info("에이전트 완료")
 
-            self.buy_tickers = list(dict.fromkeys(
-                t["args"].get("ticker", "")
-                for t in self.tool_call_log
-                if t["tool"] == "buy_stock" and t["args"].get("ticker")
-            ))
+            successful_buys: list[str] = []
+            for tool_call in self.tool_call_log:
+                if tool_call["tool"] != "buy_stock" or not tool_call["args"].get("ticker"):
+                    continue
+                if tool_call.get("success") is True:
+                    successful_buys.append(tool_call["args"]["ticker"])
+            self.buy_tickers = list(dict.fromkeys(successful_buys))
 
             if not skip_log:
                 try:
