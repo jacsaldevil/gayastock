@@ -1,12 +1,12 @@
 """Gemini 기반 주식 트레이딩 에이전트 (Vertex AI)"""
+import json
 import logging
 import os
-import json
 from datetime import datetime, time as dtime
 from pathlib import Path
 from data.utils import get_now_kst
 import vertexai
-from vertexai.generative_models import GenerativeModel, GenerationConfig, Part, Content, Tool, grounding
+from vertexai.generative_models import GenerativeModel, GenerationConfig, Part, Tool, grounding
 from agent.tools import GEMINI_TOOLS, execute_tool, _broker, set_sim_portfolio, get_sim_portfolio
 from data.trade_log import log_agent_run
 from config import GCP_PROJECT_ID, GCP_REGION, GEMINI_MODEL, MAX_POSITIONS, TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_HOLD_DAYS

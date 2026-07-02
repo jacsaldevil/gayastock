@@ -1,3 +1,4 @@
+# ruff: noqa: E402
 """gayastock 대시보드 — streamlit run dashboard/app.py"""
 import sys
 import os
@@ -32,7 +33,8 @@ def _load_settings() -> dict:
     _settings_load_error = ""
     _settings_load_info = ""
     if _GCS_DATA_BUCKET:
-        import urllib.request, urllib.error
+        import urllib.error
+        import urllib.request
         bucket = _GCS_DATA_BUCKET.strip()
         url = f"https://storage.googleapis.com/{bucket}/{_SETTINGS_BLOB}"
         # 1단계: 공개 URL로 읽기 (인증 없이)
@@ -43,7 +45,7 @@ def _load_settings() -> dict:
                 return data
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                _settings_load_info = f"settings.json 없음 (공개 URL 404) — 아직 저장 안 됨"
+                _settings_load_info = "settings.json 없음 (공개 URL 404) — 아직 저장 안 됨"
             else:
                 _settings_load_info = f"공개 URL {e.code}: {e.reason} — 인증 읽기 시도"
         except Exception as e:
@@ -696,11 +698,16 @@ if page == "포트폴리오":
             _buy_amt = _avg_p * _qty
             _pl_amt  = (_cur_p - _avg_p) * _qty
 
-            if _rate >= 3.5:    _remark = "🎯 TP 임박"
-            elif _rate >= 1.5:  _remark = "📈 수익권"
-            elif _rate >= 0:    _remark = "🟡 보합"
-            elif _rate >= -2.0: _remark = "📉 손실권"
-            else:               _remark = "⚠️ SL 위험"
+            if _rate >= 3.5:
+                _remark = "🎯 TP 임박"
+            elif _rate >= 1.5:
+                _remark = "📈 수익권"
+            elif _rate >= 0:
+                _remark = "🟡 보합"
+            elif _rate >= -2.0:
+                _remark = "📉 손실권"
+            else:
+                _remark = "⚠️ SL 위험"
 
             _hold_rows.append({
                 "종목명":   _h.get("name") or _h.get("ticker", ""),

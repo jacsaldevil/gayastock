@@ -4,7 +4,6 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime
 from data.utils import get_now_kst
 
 logger = logging.getLogger(__name__)
@@ -88,7 +87,7 @@ def _gcs_append_line(blob_name: str, line: str) -> bool:
                         else:
                             raise
 
-                    existing_lines = [l for l in existing.splitlines() if l.strip()]
+                    existing_lines = [line_text for line_text in existing.splitlines() if line_text.strip()]
                     lines = _trim_to_latest_day(existing_lines, line)
 
                     blob.upload_from_string(
@@ -119,7 +118,7 @@ def _gcs_append_line(blob_name: str, line: str) -> bool:
 
 def _local_append(filepath: str, line: str):
     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    existing = [l for l in _local_read_lines(filepath) if l.strip()]
+    existing = [line_text for line_text in _local_read_lines(filepath) if line_text.strip()]
     lines = _trim_to_latest_day(existing, line)
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")

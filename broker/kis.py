@@ -373,7 +373,6 @@ class KISBroker:
 
     def get_daily_candles(self, ticker: str, days: int = 20) -> list[dict]:
         """일봉 조회 (TR: FHKST03010100) — 최근 N거래일 OHLCV + 등락률"""
-        from datetime import date
         end = get_now_kst().strftime("%Y%m%d")
         # 충분한 날짜 범위 확보 (영업일 기준 days개를 확보하려면 달력일 기준으로 더 넓게)
         start = (get_now_kst() - timedelta(days=days * 2)).strftime("%Y%m%d")

@@ -5,6 +5,7 @@ import os
 import re
 from vertexai.generative_models import Tool, FunctionDeclaration
 from data.trade_log import log_trade
+from data.financial import _get_broker as _get_kis_broker
 from config import RSI_MAX_ENTRY, MAX_DAILY_BUY_PER_TICKER, MARKET_PROXY_TICKER
 
 logger = logging.getLogger(__name__)
@@ -12,9 +13,6 @@ logger = logging.getLogger(__name__)
 
 def _is_dry_run() -> bool:
     return os.environ.get("DRY_RUN", "false").lower() == "true"
-
-# KISBroker 싱글턴 — financial.py와 동일 인스턴스 공유
-from data.financial import _get_broker as _get_kis_broker
 
 def _broker():
     return _get_kis_broker()

@@ -150,7 +150,7 @@ for tk, pl in ranked[:5]:
     print(f"  {ticker_name[tk]}({tk})  ₩{pl:+,.0f}")
 
 if len(ranked) > 5:
-    print(f"\n[종목별 실현손익 Bottom 5]")
+    print("\n[종목별 실현손익 Bottom 5]")
     for tk, pl in ranked[-5:]:
         print(f"  {ticker_name[tk]}({tk})  ₩{pl:+,.0f}")
 
