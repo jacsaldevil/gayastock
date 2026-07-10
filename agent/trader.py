@@ -197,7 +197,13 @@ class TradingAgent:
                         result_str = execute_tool(fn.name, args)
                         logger.info(f"결과: {result_str[:200]}")
                         try:
-                            result_success = json.loads(result_str).get("success")
+                            parsed_result = json.loads(result_str)
+                            if isinstance(parsed_result, dict):
+                                result_success = parsed_result.get("success")
+                            elif isinstance(parsed_result, list):
+                                result_success = True
+                            else:
+                                result_success = None
                         except json.JSONDecodeError:
                             result_success = None
                         self.tool_call_log.append({
