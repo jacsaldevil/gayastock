@@ -89,6 +89,20 @@ class StrategyRulesTest(unittest.TestCase):
         self.assertGreater(sized["quantity"], 0)
         self.assertLessEqual(sized["quantity"] * 10_000, 120_000)
 
+    def test_existing_position_reduces_additional_size(self):
+        sized = calculate_position_size(
+            price=10_000,
+            cash=300_000,
+            total_eval=300_000,
+            holdings_eval=100_000,
+            atr_pct=4.0,
+            regime_scale=1.0,
+            setup_scale=1.0,
+            max_buy_amount=500_000,
+            existing_position_value=160_000,
+        )
+        self.assertEqual(sized["quantity"], 0)
+
     def test_augment_technicals_computes_breakout_and_atr(self):
         closes = [100 + i for i in range(60)]
         rows = candles_from_closes(closes, latest_change=2.0, volumes=[100_000] * 59 + [200_000])
