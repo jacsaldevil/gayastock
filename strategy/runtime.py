@@ -17,6 +17,7 @@ from config import (
     MAX_BUY_AMOUNT,
     MAX_DAILY_BUY_PER_TICKER,
     MAX_POSITION_PCT,
+    MAX_POSITIONS,
     MAX_RISK_PER_TRADE_PCT,
     MIN_STOCK_PRICE,
     STOP_LOSS_PCT,
@@ -163,6 +164,19 @@ def _buy_stock(tool_input: dict[str, Any]) -> str:
     else:
         portfolio = broker.get_balance()
 
+    holdings = portfolio.get("holdings", []) or []
+    existing_holding = next((holding for holding in holdings if holding.get("ticker") == ticker), None)
+    if existing_holding is None and len(holdings) >= MAX_POSITIONS:
+        return json.dumps({
+            "success": False,
+            "message": f"최대 보유 종목 수 {MAX_POSITIONS}개 도달 — 신규 종목 매수 금지",
+        }, ensure_ascii=False)
+    existing_position_value = 0
+    if existing_holding:
+        existing_position_value = int(existing_holding.get("quantity", 0) or 0) * int(
+            existing_holding.get("current_price", current_price) or current_price
+        )
+
     sizing = calculate_position_size(
         price=current_price,
         cash=float(portfolio.get("cash", 0) or 0),
@@ -172,6 +186,7 @@ def _buy_stock(tool_input: dict[str, Any]) -> str:
         regime_scale=float(regime.get("recommended_buy_scale", 0) or 0),
         setup_scale=float(entry.get("setup_scale", 0) or 0),
         max_buy_amount=MAX_BUY_AMOUNT,
+        existing_position_value=existing_position_value,
         risk_per_trade_pct=MAX_RISK_PER_TRADE_PCT,
         max_position_pct=MAX_POSITION_PCT,
         hard_stop_pct=STOP_LOSS_PCT,
