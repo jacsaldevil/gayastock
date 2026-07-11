@@ -251,6 +251,7 @@ def calculate_position_size(
     regime_scale: float,
     setup_scale: float,
     max_buy_amount: float,
+    existing_position_value: float = 0.0,
     risk_per_trade_pct: float = 1.5,
     max_position_pct: float = 40.0,
     hard_stop_pct: float = 7.0,
@@ -264,7 +265,8 @@ def calculate_position_size(
     stop_distance_pct = min(hard_stop_pct, max(4.0, float(atr_pct or 0) * 1.5))
     risk_budget = equity * risk_per_trade_pct / 100
     risk_cap = risk_budget / (stop_distance_pct / 100) if stop_distance_pct > 0 else 0
-    position_cap = equity * max_position_pct / 100 * effective_scale
+    target_position_cap = equity * max_position_pct / 100 * effective_scale
+    position_cap = max(0.0, target_position_cap - float(existing_position_value or 0))
     cash_cap = float(cash or 0) * effective_scale
     max_amount = max(0.0, min(float(max_buy_amount), risk_cap, position_cap, cash_cap))
     quantity = int(max_amount // price)
