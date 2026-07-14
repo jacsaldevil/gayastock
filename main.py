@@ -78,6 +78,36 @@ def _check_needs_action(broker, take_profit_pct: float, stop_loss_pct: float,
     return True, []
 
 
+def _snapshot_market_regime(execute_tool) -> dict:
+    """LLM 판단과 별도로 시장 레짐 원본 수치를 저장해 사후 검증 가능하게 한다."""
+    try:
+        raw = execute_tool("get_market_regime", {})
+        parsed = json.loads(raw)
+        if isinstance(parsed, dict):
+            return parsed
+        return {"status": "invalid", "raw_type": type(parsed).__name__, "raw": parsed}
+    except Exception as exc:
+        logger.warning("시장 레짐 진단 스냅샷 실패: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+
+def _llm_diagnostics(agent, result: str, model_name: str) -> dict:
+    """LLM 호출 성공 여부와 실제 함수 호출 경로를 구조화해 기록한다."""
+    result = result or ""
+    error_prefixes = (
+        "Gemini API 초기 호출 실패:",
+        "에이전트 루프 중 오류 발생",
+    )
+    tool_log = list(getattr(agent, "tool_call_log", []) or [])
+    return {
+        "model": model_name,
+        "status": "error" if result.startswith(error_prefixes) else "completed",
+        "response_length": len(result),
+        "tool_call_count": len(tool_log),
+        "tools": [entry.get("tool", "") for entry in tool_log],
+    }
+
+
 def run_trading(watchlist: list[str] | None = None):
     dry_run = os.environ.get("DRY_RUN", "false").lower() == "true"
     if not dry_run and not is_trading_day() and os.environ.get("FORCE_RUN") != "true":
@@ -85,11 +115,11 @@ def run_trading(watchlist: list[str] | None = None):
         return
 
     from agent.trader import TradingAgent
-    from agent.tools import _broker
+    from agent.tools import _broker, execute_tool
     from data.trade_log import log_agent_run
     from config import (
         TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
-        INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC,
+        INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC, GEMINI_MODEL,
     )
     agent = TradingAgent()
     broker = _broker()
@@ -117,7 +147,7 @@ def run_trading(watchlist: list[str] | None = None):
             and market_open <= now_kst.time() <= market_close
         )
         if not in_market:
-            # 장외/휴장일 → 가장 최근 거래일 09:20으로 시뮬
+            # 장외/휴장일 → 가장 최근 거래일 09:00으로 시뮬
             first_slot = _SCHEDULE_SLOTS[0][0]
             check = now_kst.date()
             for _ in range(7):
@@ -150,10 +180,29 @@ def run_trading(watchlist: list[str] | None = None):
 
     for i in range(INNER_LOOP_COUNT):
         logger.info("--- 루프 %d/%d ---", i + 1, INNER_LOOP_COUNT)
-        loop_entry: dict = {"loop": i + 1, "result": None}
-        loop_p: dict = {"loop": i + 1, "status": "checking", "needs_action": False}
+        loop_entry: dict = {
+            "loop": i + 1,
+            "result": None,
+            "market_regime": None,
+            "llm": None,
+            "tool_log": [],
+        }
+        loop_p: dict = {
+            "loop": i + 1,
+            "status": "checking",
+            "needs_action": False,
+            "market_regime": None,
+            "llm": None,
+            "tool_log": [],
+        }
         progress["current_loop"] = i + 1
         progress["loops"].append(loop_p)
+        _write_progress(progress)
+
+        # LLM 호출 전 동일 전략 함수로 레짐 원본 수치를 별도 저장한다.
+        market_regime = _snapshot_market_regime(execute_tool)
+        loop_entry["market_regime"] = market_regime
+        loop_p["market_regime"] = market_regime
         _write_progress(progress)
 
         if dry_run:
@@ -181,9 +230,22 @@ def run_trading(watchlist: list[str] | None = None):
             if dry_run:
                 sim_portfolio = agent.sim_portfolio_out
             loop_entry["result"] = result
+            loop_entry["tool_log"] = list(agent.tool_call_log)
+            loop_entry["llm"] = _llm_diagnostics(agent, result, GEMINI_MODEL)
             loop_p["result_preview"] = (result or "")[:300]
+            loop_p["tool_log"] = list(agent.tool_call_log)[-10:]
+            loop_p["llm"] = loop_entry["llm"]
             all_buy_tickers.extend(agent.buy_tickers)
             logger.info("에이전트 결과:\n%s", result)
+        else:
+            loop_entry["llm"] = {
+                "model": GEMINI_MODEL,
+                "status": "skipped",
+                "response_length": 0,
+                "tool_call_count": 0,
+                "tools": [],
+            }
+            loop_p["llm"] = loop_entry["llm"]
 
         loop_p["status"] = "done"
         _write_progress(progress)
