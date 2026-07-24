@@ -15,7 +15,13 @@ def _pct_change(current: float, previous: float) -> float:
 
 
 def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.0) -> dict[str, Any]:
-    """Classify the market using trend, momentum, drawdown, and realized volatility."""
+    """Classify the market using trend, momentum, drawdown, and realized volatility.
+
+    ``crash`` remains a hard block. Below the 60-day average, however, a verified
+    rebound or a mild recovery can open only the oversold-reversal setup with a
+    reduced position scale. This avoids remaining fully idle throughout a long
+    bear-market recovery while preserving strict exposure controls.
+    """
     if len(candles) < 60:
         return {
             "status": "unknown",
@@ -66,6 +72,7 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
         "change_rate": round(latest_change_pct, 2),
     }
 
+    # 급락일은 기존과 동일하게 신규 매수 전면 차단한다.
     if latest_change_pct <= crash_pct or (realized_vol_20d_pct >= 5.0 and return_5d_pct <= -6.0):
         return {
             **metrics,
@@ -75,22 +82,43 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             "reason": "급락 또는 극단 변동성 구간 — 신규 매수 금지",
         }
 
+    # 60일선 아래에서도 강한 당일 반등과 5일 모멘텀이 확인되면 제한 진입한다.
+    # 2026-07-15과 같은 V자 반등을 기존 규칙이 전부 차단하던 문제를 완화한다.
     rebound = (
         close < ma60
         and close > ma5
-        and latest_change_pct > 0
-        and return_5d_pct >= 2.0
-        and ma20_slope_pct > -3.0
-        and drawdown_20d_pct >= -15.0
-        and realized_vol_20d_pct < 5.0
+        and latest_change_pct >= 0.8
+        and return_5d_pct >= 0.0
+        and ma20_slope_pct > -7.0
+        and drawdown_20d_pct >= -30.0
+        and realized_vol_20d_pct < 6.0
     )
     if rebound:
         return {
             **metrics,
             "status": "rebound",
             "buy_allowed": True,
-            "recommended_buy_scale": 0.25,
-            "reason": "60일선 아래지만 단기 반등 확인 — 엄격한 반등형만 25% 규모 허용",
+            "recommended_buy_scale": 0.6,
+            "reason": "60일선 아래지만 단기 반등 확인 — 과매도 반전형만 60% 축소 규모 허용",
+        }
+
+    # 완전한 반등에는 못 미쳐도 단기선 회복과 양의 모멘텀이 있으면 아주 제한적으로 탐색한다.
+    selective_risk_off = (
+        close < ma60
+        and close >= ma5
+        and latest_change_pct >= 0.5
+        and return_5d_pct >= -2.0
+        and ma20_slope_pct > -8.0
+        and drawdown_20d_pct >= -30.0
+        and realized_vol_20d_pct < 5.5
+    )
+    if selective_risk_off:
+        return {
+            **metrics,
+            "status": "risk_off_selective",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.35,
+            "reason": "60일선 아래의 제한적 회복 — 엄격한 과매도 반전형만 35% 축소 규모 허용",
         }
 
     if close < ma60:
@@ -99,7 +127,7 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             "status": "risk_off",
             "buy_allowed": False,
             "recommended_buy_scale": 0.0,
-            "reason": "60일선 하회 및 반등 확인 부족 — 신규 매수 금지",
+            "reason": "60일선 하회 및 단기 회복 확인 부족 — 신규 매수 금지",
         }
 
     caution = close < ma20 or ma20_slope_pct < 0 or realized_vol_20d_pct >= 3.5 or return_5d_pct <= -4.0
@@ -217,8 +245,10 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
     if leader_pullback:
         return {"allowed": True, "setup": "leader_pullback", "setup_scale": 1.0, "reason": "중기 주도주가 20일선 위에서 건전한 눌림목 형성"}
 
+    # 약세장에서는 이 한 가지 진입 유형만 허용한다. 스케일은 기존 0.5에서
+    # 0.8로 높이되 레짐 스케일과 리스크 예산이 최종 수량을 다시 제한한다.
     oversold_reversal = (
-        status in ("rebound", "caution", "risk_on")
+        status in ("risk_off_selective", "rebound", "caution", "risk_on")
         and weekly in ("up", "sideways")
         and bb in ("below_lower", "lower_touch")
         and 25 <= rsi <= 45
@@ -227,7 +257,7 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
         and atr_pct <= 8.0
     )
     if oversold_reversal:
-        return {"allowed": True, "setup": "oversold_reversal", "setup_scale": 0.5, "reason": "과매도 구간에서 단기 반전 확인"}
+        return {"allowed": True, "setup": "oversold_reversal", "setup_scale": 0.8, "reason": "과매도 구간에서 단기 반전 확인"}
 
     return {
         "allowed": False,
