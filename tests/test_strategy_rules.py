@@ -25,6 +25,10 @@ def candles_from_closes(closes, latest_change=0.0, volumes=None):
     return rows
 
 
+def recovering_bear_market_closes():
+    return [200 - i * 1.0 for i in range(70)] + [130, 131, 132, 133, 134, 136, 138, 140, 142, 145]
+
+
 class StrategyRulesTest(unittest.TestCase):
     def test_crash_blocks_new_buys(self):
         closes = [100 + i * 0.5 for i in range(79)] + [90]
@@ -32,12 +36,28 @@ class StrategyRulesTest(unittest.TestCase):
         self.assertEqual(regime["status"], "crash")
         self.assertFalse(regime["buy_allowed"])
 
-    def test_rebound_below_ma60_is_small_scale(self):
-        closes = [200 - i * 1.0 for i in range(70)] + [130, 131, 132, 133, 134, 136, 138, 140, 142, 145]
-        regime = evaluate_market_regime(candles_from_closes(closes, latest_change=2.5))
+    def test_rebound_below_ma60_allows_reduced_entries(self):
+        regime = evaluate_market_regime(
+            candles_from_closes(recovering_bear_market_closes(), latest_change=2.5)
+        )
         self.assertEqual(regime["status"], "rebound")
         self.assertTrue(regime["buy_allowed"])
-        self.assertEqual(regime["recommended_buy_scale"], 0.25)
+        self.assertEqual(regime["recommended_buy_scale"], 0.6)
+
+    def test_mild_recovery_uses_selective_risk_off(self):
+        regime = evaluate_market_regime(
+            candles_from_closes(recovering_bear_market_closes(), latest_change=0.6)
+        )
+        self.assertEqual(regime["status"], "risk_off_selective")
+        self.assertTrue(regime["buy_allowed"])
+        self.assertEqual(regime["recommended_buy_scale"], 0.35)
+
+    def test_negative_risk_off_still_blocks_entries(self):
+        regime = evaluate_market_regime(
+            candles_from_closes(recovering_bear_market_closes(), latest_change=-1.0)
+        )
+        self.assertEqual(regime["status"], "risk_off")
+        self.assertFalse(regime["buy_allowed"])
 
     def test_momentum_breakout_allows_upper_band(self):
         regime = {"status": "risk_on", "buy_allowed": True, "recommended_buy_scale": 1.0}
@@ -75,6 +95,30 @@ class StrategyRulesTest(unittest.TestCase):
         }
         self.assertFalse(classify_entry(regime, tech)["allowed"])
 
+    def test_selective_risk_off_allows_only_oversold_reversal(self):
+        regime = {
+            "status": "risk_off_selective",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.35,
+        }
+        tech = {
+            "bb_position": "lower_touch",
+            "rsi": 36,
+            "weekly_trend": "sideways",
+            "change_rate": 1.2,
+            "return_5d_pct": -3.0,
+            "return_20d_pct": -12.0,
+            "breakout_pct": -15.0,
+            "volume_pace_ratio": 1.1,
+            "atr14_pct": 5.0,
+            "above_ma5": True,
+            "above_ma20": False,
+        }
+        entry = classify_entry(regime, tech)
+        self.assertTrue(entry["allowed"])
+        self.assertEqual(entry["setup"], "oversold_reversal")
+        self.assertEqual(entry["setup_scale"], 0.8)
+
     def test_position_size_is_risk_capped(self):
         sized = calculate_position_size(
             price=10_000,
@@ -88,6 +132,34 @@ class StrategyRulesTest(unittest.TestCase):
         )
         self.assertGreater(sized["quantity"], 0)
         self.assertLessEqual(sized["quantity"] * 10_000, 120_000)
+
+    def test_rebound_scale_can_buy_one_moderate_price_share(self):
+        sized = calculate_position_size(
+            price=30_000,
+            cash=283_616,
+            total_eval=283_616,
+            holdings_eval=0,
+            atr_pct=5.0,
+            regime_scale=0.6,
+            setup_scale=0.8,
+            max_buy_amount=500_000,
+        )
+        self.assertGreaterEqual(sized["quantity"], 1)
+        self.assertLessEqual(sized["max_amount"], 55_000)
+
+    def test_selective_risk_off_can_buy_one_lower_price_share(self):
+        sized = calculate_position_size(
+            price=30_000,
+            cash=283_616,
+            total_eval=283_616,
+            holdings_eval=0,
+            atr_pct=5.0,
+            regime_scale=0.35,
+            setup_scale=0.8,
+            max_buy_amount=500_000,
+        )
+        self.assertEqual(sized["quantity"], 1)
+        self.assertLessEqual(sized["max_amount"], 32_000)
 
     def test_existing_position_reduces_additional_size(self):
         sized = calculate_position_size(
