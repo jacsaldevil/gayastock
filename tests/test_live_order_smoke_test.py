@@ -79,11 +79,6 @@ class FakeBroker:
 
 
 class LiveOrderSmokeTest(unittest.TestCase):
-    def setUp(self):
-        mock_patcher = patch("ops.live_order_smoke_test.KIS_MOCK", False)
-        mock_patcher.start()
-        self.addCleanup(mock_patcher.stop)
-
     def env(self):
         return patch.dict(os.environ, {
             "LIVE_SMOKE_TEST_ENABLED": "true",
@@ -94,6 +89,7 @@ class LiveOrderSmokeTest(unittest.TestCase):
             "LIVE_SMOKE_TEST_WINDOW_START": "09:20",
             "LIVE_SMOKE_TEST_WINDOW_END": "10:30",
             "DRY_RUN": "false",
+            "KIS_MOCK": "false",
         }, clear=False)
 
     @patch("ops.live_order_smoke_test.log_trade")
