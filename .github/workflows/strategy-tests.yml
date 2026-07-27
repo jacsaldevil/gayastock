@@ -11,10 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          show-progress: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Run live order smoke tests
+        run: python -m unittest discover -s tests -p "test_live_order_smoke_test.py" -v
       - name: Run strategy tests
-        run: python -m unittest discover -s tests -v
+        run: python -m unittest discover -s tests -p "test_strategy_rules.py" -v
       - name: Compile changed runtime modules
-        run: python -m py_compile strategy/*.py tests/test_strategy_rules.py config.py main.py agent/trader.py data/trade_log.py
+        run: python -m py_compile strategy/*.py ops/*.py tests/*.py config.py main.py agent/trader.py data/trade_log.py
