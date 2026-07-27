@@ -9,7 +9,7 @@ from ops.live_order_smoke_test import MemoryStateStore, run_live_order_smoke_tes
 class FakeBroker:
     def __init__(self, *, fill_buy=True, fill_sell=True, initial_qty=0):
         self.qty = initial_qty
-        self.cash = 283_616 - max(0, initial_qty) * 0
+        self.cash = 283_616
         self.fill_buy = fill_buy
         self.fill_sell = fill_sell
         self.buy_calls = 0
@@ -78,8 +78,12 @@ class FakeBroker:
         return {"success": True, "order_no": order_no, "message": "cancelled"}
 
 
-@patch("ops.live_order_smoke_test.KIS_MOCK", False)
 class LiveOrderSmokeTest(unittest.TestCase):
+    def setUp(self):
+        mock_patcher = patch("ops.live_order_smoke_test.KIS_MOCK", False)
+        mock_patcher.start()
+        self.addCleanup(mock_patcher.stop)
+
     def env(self):
         return patch.dict(os.environ, {
             "LIVE_SMOKE_TEST_ENABLED": "true",
