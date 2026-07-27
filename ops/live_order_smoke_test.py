@@ -1,18 +1,4 @@
-"""One-time real-account order smoke test.
-
-On one exact KST date and inside a narrow time window this routine:
-
-1. reserves a generation-guarded GCS state,
-2. submits one market buy for a whitelisted liquid ticker,
-3. verifies the holding quantity actually increased,
-4. sells only that newly acquired quantity,
-5. verifies the account returned to its original holding quantity.
-
-Order intent is persisted *before* each KIS call.  If the process stops between
-submission and state update, the next scheduled run inspects holdings and pending
-orders before deciding whether it is safe to resume.  When persistent state is
-unavailable the routine fails closed and sends no order.
-"""
+"""One-time real-account buy/sell smoke test with duplicate-order safeguards."""
 from __future__ import annotations
 
 import json
@@ -23,20 +9,18 @@ import uuid
 from datetime import datetime, time as dtime, timedelta
 from typing import Any, Protocol
 
-from config import KIS_MOCK, MARKET_PROXY_TICKER
 from data.trade_log import log_cancel, log_trade
 from data.utils import get_now_kst
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DATE = "2026-07-28"
-_DEFAULT_TICKER = MARKET_PROXY_TICKER  # 069500 KODEX 200
-_DEFAULT_QTY = 1
+_DEFAULT_TICKER = "069500"  # KODEX 200
 _DEFAULT_MAX_PRICE = 150_000
 _DEFAULT_WINDOW_START = dtime(9, 20)
 _DEFAULT_WINDOW_END = dtime(10, 30)
 _MAX_SELL_ATTEMPTS = 2
-_TERMINAL_STATUSES = {
+_TERMINAL = {
     "completed",
     "buy_rejected",
     "buy_not_filled",
@@ -51,43 +35,13 @@ class StateStore(Protocol):
     def save(self, state: dict[str, Any], *, create: bool = False) -> None: ...
 
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    return os.environ.get(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _parse_hhmm(raw: str, default: dtime) -> dtime:
-    try:
-        hour, minute = (int(part) for part in raw.split(":", 1))
-        return dtime(hour, minute)
-    except Exception:
-        return default
-
-
-def _holding_qty(portfolio: dict[str, Any], ticker: str) -> int:
-    for holding in portfolio.get("holdings", []) or []:
-        if str(holding.get("ticker", "")) == ticker:
-            return int(holding.get("quantity", 0) or 0)
-    return 0
-
-
-def _holding(portfolio: dict[str, Any], ticker: str) -> dict[str, Any] | None:
-    return next(
-        (holding for holding in portfolio.get("holdings", []) or [] if str(holding.get("ticker", "")) == ticker),
-        None,
-    )
-
-
-def _public_state(state: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in state.items() if key not in {"owner", "lease_until"}}
-
-
 class GCSStateStore:
-    """Generation-guarded GCS state used to prevent duplicate real orders."""
+    """Generation-guarded GCS state. No state store means no live order."""
 
     def __init__(self, test_date: str):
         bucket_name = os.environ.get("GCS_DATA_BUCKET", "").strip()
         if not bucket_name:
-            raise RuntimeError("GCS_DATA_BUCKET 미설정 — 중복 주문 방지를 보장할 수 없음")
+            raise RuntimeError("GCS_DATA_BUCKET 미설정 — 중복 주문 방지 불가")
         from google.cloud import storage
 
         self._blob = storage.Client().bucket(bucket_name).blob(
@@ -109,7 +63,7 @@ class GCSStateStore:
     def save(self, state: dict[str, Any], *, create: bool = False) -> None:
         generation = 0 if create else self._generation
         if generation is None:
-            raise RuntimeError("상태를 load하지 않고 save할 수 없음")
+            raise RuntimeError("상태 load 없이 save할 수 없음")
         self._blob.upload_from_string(
             json.dumps(state, ensure_ascii=False, indent=2),
             content_type="application/json; charset=utf-8",
@@ -120,7 +74,7 @@ class GCSStateStore:
 
 
 class MemoryStateStore:
-    """Unit-test helper; never selected automatically in live mode."""
+    """Unit-test helper only."""
 
     def __init__(self, state: dict[str, Any] | None = None):
         self.state = state
@@ -134,36 +88,34 @@ class MemoryStateStore:
         self.state = dict(state)
 
 
-def _matching_pending(broker, ticker: str, action: str) -> list[dict[str, Any]]:
+def _env_bool(name: str, default: bool = False) -> bool:
+    return os.environ.get(name, str(default)).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_hhmm(raw: str, default: dtime) -> dtime:
     try:
-        return [
-            order for order in broker.get_pending_orders()
-            if str(order.get("ticker", "")) == ticker and str(order.get("action", "")) == action
-        ]
-    except Exception as exc:
-        logger.warning("스모크 테스트 미체결 조회 실패: %s", exc)
-        return []
+        hour, minute = (int(part) for part in raw.split(":", 1))
+        return dtime(hour, minute)
+    except Exception:
+        return default
 
 
-def _poll_quantity(
-    broker,
-    ticker: str,
-    predicate,
-    *,
-    attempts: int = 6,
-    sleep_sec: float = 2.0,
-    sleep_fn=time.sleep,
-) -> tuple[int, dict[str, Any]]:
-    portfolio: dict[str, Any] = {}
-    qty = 0
-    for attempt in range(attempts):
-        portfolio = broker.get_balance()
-        qty = _holding_qty(portfolio, ticker)
-        if predicate(qty):
-            break
-        if attempt < attempts - 1:
-            sleep_fn(sleep_sec)
-    return qty, portfolio
+def _qty(portfolio: dict[str, Any], ticker: str) -> int:
+    for holding in portfolio.get("holdings", []) or []:
+        if str(holding.get("ticker", "")) == ticker:
+            return int(holding.get("quantity", 0) or 0)
+    return 0
+
+
+def _holding(portfolio: dict[str, Any], ticker: str) -> dict[str, Any] | None:
+    return next(
+        (h for h in portfolio.get("holdings", []) or [] if str(h.get("ticker", "")) == ticker),
+        None,
+    )
+
+
+def _public(state: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in state.items() if k not in {"owner", "lease_until"}}
 
 
 def _save(store: StateStore, state: dict[str, Any], now: datetime) -> None:
@@ -177,15 +129,14 @@ def _claim(
     now: datetime,
     test_date: str,
     ticker: str,
-    qty: int,
 ) -> tuple[dict[str, Any] | None, str]:
-    owner = uuid.uuid4().hex
     state = store.load()
+    owner = uuid.uuid4().hex
     if state is None:
         state = {
             "test_date": test_date,
             "ticker": ticker,
-            "requested_qty": qty,
+            "requested_qty": 1,
             "status": "claimed",
             "owner": owner,
             "created_at": now.isoformat(),
@@ -196,17 +147,16 @@ def _claim(
             store.save(state, create=True)
             return state, "claimed"
         except Exception as exc:
-            logger.warning("스모크 테스트 최초 상태 선점 실패: %s", exc)
+            logger.warning("스모크 테스트 상태 선점 실패: %s", exc)
             return None, "busy"
 
-    if state.get("status") in _TERMINAL_STATUSES:
+    if state.get("status") in _TERMINAL:
         return state, "terminal"
-
     try:
         lease_until = datetime.fromisoformat(str(state.get("lease_until", "")))
     except Exception:
         lease_until = now - timedelta(seconds=1)
-    if lease_until > now and state.get("owner"):
+    if state.get("owner") and lease_until > now:
         return state, "busy"
 
     state["owner"] = owner
@@ -214,10 +164,34 @@ def _claim(
     state["updated_at"] = now.isoformat()
     try:
         store.save(state)
+        return state, "resumed"
     except Exception as exc:
         logger.warning("스모크 테스트 상태 재선점 실패: %s", exc)
         return None, "busy"
-    return state, "resumed"
+
+
+def _pending(broker, ticker: str, action: str) -> list[dict[str, Any]]:
+    try:
+        return [
+            order for order in broker.get_pending_orders()
+            if str(order.get("ticker", "")) == ticker and str(order.get("action", "")) == action
+        ]
+    except Exception as exc:
+        logger.warning("미체결 조회 실패: %s", exc)
+        return []
+
+
+def _poll(broker, ticker: str, predicate, sleep_fn) -> tuple[int, dict[str, Any]]:
+    portfolio: dict[str, Any] = {}
+    observed = 0
+    for attempt in range(6):
+        portfolio = broker.get_balance()
+        observed = _qty(portfolio, ticker)
+        if predicate(observed):
+            break
+        if attempt < 5:
+            sleep_fn(2.0)
+    return observed, portfolio
 
 
 def _record_buy_fill(
@@ -226,70 +200,61 @@ def _record_buy_fill(
     portfolio: dict[str, Any],
     ticker: str,
     initial_qty: int,
-    requested_qty: int,
     test_date: str,
     now: datetime,
 ) -> int:
-    actual_qty = _holding_qty(portfolio, ticker)
-    bought_qty = min(max(0, actual_qty - initial_qty), requested_qty)
+    bought_qty = min(max(0, _qty(portfolio, ticker) - initial_qty), 1)
     if bought_qty <= 0:
         return 0
     holding = _holding(portfolio, ticker) or {}
     buy_price = int(float(holding.get("avg_price", state.get("buy_reference_price", 0)) or 0))
-    state["bought_qty"] = bought_qty
-    state["buy_fill_price"] = buy_price
-    state["status"] = "buy_filled"
+    state.update({"status": "buy_filled", "bought_qty": bought_qty, "buy_fill_price": buy_price})
     if not state.get("buy_logged"):
         log_trade(
-            "BUY",
-            ticker,
-            bought_qty,
-            buy_price,
+            "BUY", ticker, bought_qty, buy_price,
             f"[LIVE-SMOKE-TEST {test_date}] KIS 매수 주문 및 잔고 반영 검증",
-            True,
-            str(state.get("stock_name", "")),
+            True, str(state.get("stock_name", "")),
         )
         state["buy_logged"] = True
     _save(store, state, now)
     return bought_qty
 
 
-def _complete_sell(
+def _complete(
     store: StateStore,
     state: dict[str, Any],
     broker,
-    final_portfolio: dict[str, Any],
+    portfolio: dict[str, Any],
     ticker: str,
     initial_qty: int,
     test_date: str,
     now: datetime,
 ) -> dict[str, Any]:
-    final_qty = _holding_qty(final_portfolio, ticker)
-    sell_price_info = broker.get_current_price(ticker)
-    sell_price = int(sell_price_info.get("current_price", 0) or 0)
+    final_qty = _qty(portfolio, ticker)
+    if final_qty != initial_qty:
+        raise RuntimeError(f"잔고 원복 실패: initial={initial_qty}, final={final_qty}")
+    sell_price = int(broker.get_current_price(ticker).get("current_price", 0) or 0)
     buy_price = int(state.get("buy_fill_price", state.get("buy_reference_price", 0)) or 0)
     bought_qty = int(state.get("bought_qty", 1) or 1)
     if not state.get("sell_logged"):
         log_trade(
-            "SELL",
-            ticker,
-            bought_qty,
-            sell_price,
+            "SELL", ticker, bought_qty, sell_price,
             f"[LIVE-SMOKE-TEST {test_date}] KIS 매도 주문 및 잔고 원복 검증",
-            True,
-            str(state.get("stock_name", "")),
+            True, str(state.get("stock_name", "")),
             profit=(sell_price - buy_price) * bought_qty,
         )
         state["sell_logged"] = True
-    state["status"] = "completed"
-    state["final_qty"] = final_qty
-    state["final_cash"] = int(final_portfolio.get("cash", 0) or 0)
-    state["sell_reference_price"] = sell_price
-    state["completed_at"] = now.isoformat()
-    state["quantity_restored"] = final_qty == initial_qty
+    state.update({
+        "status": "completed",
+        "final_qty": final_qty,
+        "final_cash": int(portfolio.get("cash", 0) or 0),
+        "sell_reference_price": sell_price,
+        "quantity_restored": True,
+        "completed_at": now.isoformat(),
+    })
     _save(store, state, now)
-    logger.warning("실계좌 주문 스모크 테스트 완료: %s %d주 왕복", ticker, bought_qty)
-    return {"attempted": True, "status": "completed", "halt_agent": False, "state": _public_state(state)}
+    logger.warning("실계좌 스모크 테스트 완료: %s 1주 매수·매도", ticker)
+    return {"attempted": True, "status": "completed", "halt_agent": False, "state": _public(state)}
 
 
 def run_live_order_smoke_test(
@@ -299,21 +264,19 @@ def run_live_order_smoke_test(
     store: StateStore | None = None,
     sleep_fn=time.sleep,
 ) -> dict[str, Any]:
-    """Run or safely resume the one-time live buy/sell verification routine."""
+    """Run or resume the one-time real-account order verification."""
     now = now or get_now_kst()
-    enabled = _env_bool("LIVE_SMOKE_TEST_ENABLED", False)
     test_date = os.environ.get("LIVE_SMOKE_TEST_DATE", _DEFAULT_DATE).strip()
     ticker = os.environ.get("LIVE_SMOKE_TEST_TICKER", _DEFAULT_TICKER).strip()
-    qty = max(1, min(int(os.environ.get("LIVE_SMOKE_TEST_QTY", _DEFAULT_QTY)), 1))
     max_price = int(os.environ.get("LIVE_SMOKE_TEST_MAX_PRICE", _DEFAULT_MAX_PRICE))
     window_start = _parse_hhmm(os.environ.get("LIVE_SMOKE_TEST_WINDOW_START", "09:20"), _DEFAULT_WINDOW_START)
     window_end = _parse_hhmm(os.environ.get("LIVE_SMOKE_TEST_WINDOW_END", "10:30"), _DEFAULT_WINDOW_END)
 
-    if not enabled:
+    if not _env_bool("LIVE_SMOKE_TEST_ENABLED"):
         return {"attempted": False, "status": "disabled", "halt_agent": False}
-    if os.environ.get("DRY_RUN", "false").lower() == "true":
+    if _env_bool("DRY_RUN"):
         return {"attempted": False, "status": "dry_run", "halt_agent": False}
-    if KIS_MOCK:
+    if _env_bool("KIS_MOCK", True):
         return {"attempted": False, "status": "mock_account", "halt_agent": False}
     if now.date().isoformat() != test_date:
         return {"attempted": False, "status": "date_mismatch", "halt_agent": False}
@@ -325,200 +288,148 @@ def run_live_order_smoke_test(
     try:
         store = store or GCSStateStore(test_date)
     except Exception as exc:
-        logger.error("실주문 스모크 테스트 차단: %s", exc)
-        return {
-            "attempted": False,
-            "status": "state_store_unavailable",
-            "halt_agent": False,
-            "error": str(exc),
-        }
+        return {"attempted": False, "status": "state_store_unavailable", "halt_agent": False, "error": str(exc)}
 
-    state, claim_status = _claim(store, now, test_date, ticker, qty)
+    state, claim_status = _claim(store, now, test_date, ticker)
     if state is None:
         return {"attempted": False, "status": claim_status, "halt_agent": False}
     if claim_status in {"terminal", "busy"}:
         return {
             "attempted": False,
-            "status": state.get("status", claim_status),
-            "halt_agent": state.get("status") not in _TERMINAL_STATUSES,
-            "state": _public_state(state),
+            "status": str(state.get("status", claim_status)),
+            "halt_agent": str(state.get("status", "")) not in _TERMINAL,
+            "state": _public(state),
         }
 
-    logger.warning("실계좌 주문 스모크 테스트 시작/재개: %s %d주 status=%s", ticker, qty, state.get("status"))
     try:
         if state.get("initial_qty") is None:
-            initial_portfolio = broker.get_balance()
-            state["initial_qty"] = _holding_qty(initial_portfolio, ticker)
-            state["initial_cash"] = int(initial_portfolio.get("cash", 0) or 0)
+            initial = broker.get_balance()
+            state["initial_qty"] = _qty(initial, ticker)
+            state["initial_cash"] = int(initial.get("cash", 0) or 0)
             _save(store, state, now)
-
         initial_qty = int(state.get("initial_qty", 0) or 0)
 
         if state.get("status") == "claimed":
             price_info = broker.get_current_price(ticker)
-            current_price = int(price_info.get("current_price", 0) or 0)
-            state["stock_name"] = str(price_info.get("name", "") or ticker)
-            state["buy_reference_price"] = current_price
-            if current_price <= 0 or current_price > max_price:
-                state["status"] = "price_limit_exceeded"
-                state["error"] = f"현재가 {current_price:,}원, 허용 상한 {max_price:,}원"
+            price = int(price_info.get("current_price", 0) or 0)
+            state.update({"stock_name": str(price_info.get("name", "") or ticker), "buy_reference_price": price})
+            if price <= 0 or price > max_price:
+                state.update({"status": "price_limit_exceeded", "error": f"현재가 {price:,}원, 상한 {max_price:,}원"})
                 _save(store, state, now)
-                return {"attempted": False, "status": state["status"], "halt_agent": False, "state": _public_state(state)}
-            if int(state.get("initial_cash", 0) or 0) < current_price * qty:
-                state["status"] = "insufficient_cash"
-                state["error"] = f"예수금 {state.get('initial_cash', 0):,}원 < 필요금액 {current_price * qty:,}원"
+                return {"attempted": False, "status": state["status"], "halt_agent": False, "state": _public(state)}
+            if int(state.get("initial_cash", 0) or 0) < price:
+                state.update({"status": "insufficient_cash", "error": f"예수금 부족: {state.get('initial_cash', 0):,}원"})
                 _save(store, state, now)
-                return {"attempted": False, "status": state["status"], "halt_agent": False, "state": _public_state(state)}
-            state["status"] = "buy_intent"
-            state["buy_intent_at"] = now.isoformat()
+                return {"attempted": False, "status": state["status"], "halt_agent": False, "state": _public(state)}
+            state.update({"status": "buy_intent", "buy_intent_at": now.isoformat()})
             _save(store, state, now)
 
         if state.get("status") == "buy_intent":
-            # A prior process may have submitted the order after persisting intent.
-            observed_portfolio = broker.get_balance()
-            if _record_buy_fill(store, state, observed_portfolio, ticker, initial_qty, qty, test_date, now) <= 0:
-                pending_buys = _matching_pending(broker, ticker, "BUY")
-                if pending_buys:
-                    state["status"] = "buy_submitted"
-                    state["buy_order_no"] = str(pending_buys[0].get("order_no", ""))
+            portfolio = broker.get_balance()
+            if _record_buy_fill(store, state, portfolio, ticker, initial_qty, test_date, now) <= 0:
+                pending_buy = _pending(broker, ticker, "BUY")
+                if pending_buy:
+                    state.update({"status": "buy_submitted", "buy_order_no": str(pending_buy[0].get("order_no", ""))})
                     _save(store, state, now)
                 else:
-                    buy_result = broker.buy_order(ticker, qty)
-                    state["buy_order"] = buy_result
-                    state["buy_order_no"] = str(buy_result.get("order_no", ""))
-                    if not buy_result.get("success"):
+                    result = broker.buy_order(ticker, 1)
+                    state.update({"buy_order": result, "buy_order_no": str(result.get("order_no", ""))})
+                    if not result.get("success"):
                         state["status"] = "buy_rejected"
                         _save(store, state, now)
                         log_trade(
-                            "BUY",
-                            ticker,
-                            qty,
-                            int(state.get("buy_reference_price", 0) or 0),
-                            f"[LIVE-SMOKE-TEST] 매수 주문 거절: {buy_result.get('message', '')}",
-                            False,
-                            str(state.get("stock_name", "")),
+                            "BUY", ticker, 1, int(state.get("buy_reference_price", 0) or 0),
+                            f"[LIVE-SMOKE-TEST] 매수 주문 거절: {result.get('message', '')}",
+                            False, str(state.get("stock_name", "")),
                         )
-                        return {"attempted": True, "status": state["status"], "halt_agent": False, "state": _public_state(state)}
+                        return {"attempted": True, "status": "buy_rejected", "halt_agent": False, "state": _public(state)}
                     state["status"] = "buy_submitted"
                     _save(store, state, now)
 
         if state.get("status") == "buy_submitted":
-            after_buy_qty, after_buy_portfolio = _poll_quantity(
-                broker,
-                ticker,
-                lambda observed: observed > initial_qty,
-                sleep_fn=sleep_fn,
-            )
-            bought_qty = _record_buy_fill(
-                store, state, after_buy_portfolio, ticker, initial_qty, qty, test_date, now
-            )
-            if bought_qty <= 0:
-                pending_buys = _matching_pending(broker, ticker, "BUY")
-                for order in pending_buys:
-                    cancel_result = broker.cancel_order(
-                        str(order.get("order_no", "")),
-                        str(order.get("krx_fwdg_ord_orgno", "")),
+            _, portfolio = _poll(broker, ticker, lambda observed: observed > initial_qty, sleep_fn)
+            if _record_buy_fill(store, state, portfolio, ticker, initial_qty, test_date, now) <= 0:
+                for order in _pending(broker, ticker, "BUY"):
+                    cancelled = broker.cancel_order(
+                        str(order.get("order_no", "")), str(order.get("krx_fwdg_ord_orgno", ""))
                     )
-                    if cancel_result.get("success"):
+                    if cancelled.get("success"):
                         log_cancel(
-                            ticker,
-                            int(order.get("remaining_qty", qty) or qty),
-                            int(order.get("order_price", 0) or 0),
-                            str(order.get("order_no", "")),
+                            ticker, int(order.get("remaining_qty", 1) or 1),
+                            int(order.get("order_price", 0) or 0), str(order.get("order_no", "")),
                             str(state.get("stock_name", "")),
                         )
                 sleep_fn(2.0)
-                after_cancel = broker.get_balance()
-                bought_qty = _record_buy_fill(
-                    store, state, after_cancel, ticker, initial_qty, qty, test_date, now
-                )
-            if bought_qty <= 0:
-                state["status"] = "buy_not_filled"
-                state["bought_qty"] = 0
-                _save(store, state, now)
-                return {"attempted": True, "status": state["status"], "halt_agent": False, "state": _public_state(state)}
+                portfolio = broker.get_balance()
+                if _record_buy_fill(store, state, portfolio, ticker, initial_qty, test_date, now) <= 0:
+                    state.update({"status": "buy_not_filled", "bought_qty": 0})
+                    _save(store, state, now)
+                    return {"attempted": True, "status": "buy_not_filled", "halt_agent": False, "state": _public(state)}
 
         if state.get("status") == "buy_filled":
-            state["status"] = "sell_intent"
-            state["sell_intent_at"] = now.isoformat()
+            state.update({"status": "sell_intent", "sell_intent_at": now.isoformat()})
             _save(store, state, now)
 
         if state.get("status") in {"sell_intent", "sell_rejected"}:
-            observed_portfolio = broker.get_balance()
-            observed_qty = _holding_qty(observed_portfolio, ticker)
-            if observed_qty <= initial_qty:
-                return _complete_sell(store, state, broker, observed_portfolio, ticker, initial_qty, test_date, now)
-
-            pending_sells = _matching_pending(broker, ticker, "SELL")
-            if pending_sells:
-                state["status"] = "sell_submitted"
-                state["sell_order_no"] = str(pending_sells[0].get("order_no", ""))
+            portfolio = broker.get_balance()
+            observed_qty = _qty(portfolio, ticker)
+            if observed_qty == initial_qty:
+                return _complete(store, state, broker, portfolio, ticker, initial_qty, test_date, now)
+            pending_sell = _pending(broker, ticker, "SELL")
+            if pending_sell:
+                state.update({"status": "sell_submitted", "sell_order_no": str(pending_sell[0].get("order_no", ""))})
                 _save(store, state, now)
             else:
                 attempts = int(state.get("sell_attempts", 0) or 0)
                 if attempts >= _MAX_SELL_ATTEMPTS:
-                    state["status"] = "recovery_required"
-                    state["remaining_test_qty"] = max(0, observed_qty - initial_qty)
-                    state["error"] = "매도 재시도 한도 초과"
+                    state.update({
+                        "status": "recovery_required",
+                        "remaining_test_qty": max(0, observed_qty - initial_qty),
+                        "error": "매도 재시도 한도 초과",
+                    })
                     _save(store, state, now)
-                    return {"attempted": True, "status": state["status"], "halt_agent": True, "state": _public_state(state)}
-
-                sell_qty = min(int(state.get("bought_qty", qty) or qty), observed_qty - initial_qty)
-                state["sell_attempts"] = attempts + 1
-                state["status"] = "sell_intent"
-                _save(store, state, now)  # persist intent before KIS submission
-                sell_result = broker.sell_order(ticker, sell_qty)
-                state["sell_order"] = sell_result
-                state["sell_order_no"] = str(sell_result.get("order_no", ""))
-                if not sell_result.get("success"):
+                    return {"attempted": True, "status": "recovery_required", "halt_agent": True, "state": _public(state)}
+                sell_qty = min(int(state.get("bought_qty", 1) or 1), observed_qty - initial_qty)
+                state.update({"sell_attempts": attempts + 1, "status": "sell_intent"})
+                _save(store, state, now)
+                result = broker.sell_order(ticker, sell_qty)
+                state.update({"sell_order": result, "sell_order_no": str(result.get("order_no", ""))})
+                if not result.get("success"):
                     state["status"] = "sell_rejected"
                     _save(store, state, now)
                     log_trade(
-                        "SELL",
-                        ticker,
-                        sell_qty,
-                        int(state.get("buy_fill_price", 0) or 0),
-                        f"[LIVE-SMOKE-TEST] 매도 주문 거절: {sell_result.get('message', '')}",
-                        False,
-                        str(state.get("stock_name", "")),
+                        "SELL", ticker, sell_qty, int(state.get("buy_fill_price", 0) or 0),
+                        f"[LIVE-SMOKE-TEST] 매도 주문 거절: {result.get('message', '')}",
+                        False, str(state.get("stock_name", "")),
                     )
-                    return {"attempted": True, "status": state["status"], "halt_agent": True, "state": _public_state(state)}
+                    return {"attempted": True, "status": "sell_rejected", "halt_agent": True, "state": _public(state)}
                 state["status"] = "sell_submitted"
                 _save(store, state, now)
 
         if state.get("status") in {"sell_submitted", "sell_pending"}:
-            final_qty, final_portfolio = _poll_quantity(
-                broker,
-                ticker,
-                lambda observed: observed <= initial_qty,
-                sleep_fn=sleep_fn,
-            )
-            if final_qty <= initial_qty:
-                return _complete_sell(store, state, broker, final_portfolio, ticker, initial_qty, test_date, now)
-
-            pending_sells = _matching_pending(broker, ticker, "SELL")
-            state["status"] = "sell_pending" if pending_sells else "sell_intent"
-            state["remaining_test_qty"] = final_qty - initial_qty
+            final_qty, portfolio = _poll(broker, ticker, lambda observed: observed == initial_qty, sleep_fn)
+            if final_qty == initial_qty:
+                return _complete(store, state, broker, portfolio, ticker, initial_qty, test_date, now)
+            pending_sell = _pending(broker, ticker, "SELL")
+            state.update({
+                "status": "sell_pending" if pending_sell else "sell_intent",
+                "remaining_test_qty": max(0, final_qty - initial_qty),
+            })
             _save(store, state, now)
-            return {"attempted": True, "status": state["status"], "halt_agent": True, "state": _public_state(state)}
+            return {"attempted": True, "status": state["status"], "halt_agent": True, "state": _public(state)}
 
-        return {
-            "attempted": True,
-            "status": str(state.get("status", "unknown")),
-            "halt_agent": str(state.get("status", "")) not in _TERMINAL_STATUSES,
-            "state": _public_state(state),
-        }
+        status = str(state.get("status", "unknown"))
+        return {"attempted": True, "status": status, "halt_agent": status not in _TERMINAL, "state": _public(state)}
     except Exception as exc:
         logger.exception("실계좌 주문 스모크 테스트 오류")
         state["error"] = str(exc)
-        current_qty = 0
         try:
-            current_qty = _holding_qty(broker.get_balance(), ticker)
+            current_qty = _qty(broker.get_balance(), ticker)
         except Exception:
-            pass
-        if current_qty > int(state.get("initial_qty", 0) or 0):
-            state["status"] = "recovery_required"
-            state["remaining_test_qty"] = current_qty - int(state.get("initial_qty", 0) or 0)
+            current_qty = int(state.get("initial_qty", 0) or 0)
+        initial_qty = int(state.get("initial_qty", 0) or 0)
+        if current_qty > initial_qty:
+            state.update({"status": "recovery_required", "remaining_test_qty": current_qty - initial_qty})
             halt_agent = True
         else:
             state["status"] = "failed_before_buy"
@@ -532,5 +443,5 @@ def run_live_order_smoke_test(
             "status": state["status"],
             "halt_agent": halt_agent,
             "error": str(exc),
-            "state": _public_state(state),
+            "state": _public(state),
         }
