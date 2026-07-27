@@ -154,7 +154,7 @@ class LiveOrderSmokeTest(unittest.TestCase):
         self.assertEqual(broker.buy_calls, 0)
         self.assertEqual(broker.sell_calls, 0)
 
-    def test_wrong_date_never_touches_broker(self):
+    def test_wrong_date_never_starts_new_order(self):
         broker = FakeBroker()
         with self.env():
             result = run_live_order_smoke_test(
@@ -241,6 +241,36 @@ class LiveOrderSmokeTest(unittest.TestCase):
         self.assertEqual(broker.buy_calls, 0)
         self.assertEqual(broker.sell_calls, 0)
         self.assertTrue(store.state["quantity_restored"])
+
+    @patch("ops.live_order_smoke_test.log_trade")
+    @patch("ops.live_order_smoke_test.log_cancel")
+    def test_unfinished_sell_recovers_after_entry_window(self, _log_cancel, _log_trade):
+        broker = FakeBroker(initial_qty=1)
+        store = MemoryStateStore({
+            "status": "recovery_required",
+            "test_date": "2026-07-28",
+            "ticker": "069500",
+            "requested_qty": 1,
+            "initial_qty": 0,
+            "bought_qty": 1,
+            "buy_fill_price": 107_000,
+            "buy_logged": True,
+            "stock_name": "KODEX 200",
+            "sell_attempts": 0,
+            "owner": "stale-owner",
+            "lease_until": "2026-07-28T10:35:00",
+        })
+        with self.env():
+            result = run_live_order_smoke_test(
+                broker,
+                now=datetime(2026, 7, 28, 11, 0),
+                store=store,
+                sleep_fn=lambda _: None,
+            )
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(broker.buy_calls, 0)
+        self.assertEqual(broker.sell_calls, 1)
+        self.assertEqual(broker.qty, 0)
 
 
 if __name__ == "__main__":
