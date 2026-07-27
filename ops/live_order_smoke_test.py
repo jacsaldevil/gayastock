@@ -1,4 +1,4 @@
-"""One-time real-account buy/sell smoke test with duplicate-order safeguards."""
+"""One-time real-account buy/sell smoke test with crash-safe recovery."""
 from __future__ import annotations
 
 import json
@@ -36,7 +36,7 @@ class StateStore(Protocol):
 
 
 class GCSStateStore:
-    """Generation-guarded GCS state. No state store means no live order."""
+    """Generation-guarded state. Without persistent state, no order is sent."""
 
     def __init__(self, test_date: str):
         bucket_name = os.environ.get("GCS_DATA_BUCKET", "").strip()
@@ -115,7 +115,7 @@ def _holding(portfolio: dict[str, Any], ticker: str) -> dict[str, Any] | None:
 
 
 def _public(state: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in state.items() if k not in {"owner", "lease_until"}}
+    return {key: value for key, value in state.items() if key not in {"owner", "lease_until"}}
 
 
 def _save(store: StateStore, state: dict[str, Any], now: datetime) -> None:
@@ -126,13 +126,17 @@ def _save(store: StateStore, state: dict[str, Any], now: datetime) -> None:
 
 def _claim(
     store: StateStore,
+    existing: dict[str, Any] | None,
     now: datetime,
     test_date: str,
     ticker: str,
+    *,
+    allow_create: bool,
 ) -> tuple[dict[str, Any] | None, str]:
-    state = store.load()
     owner = uuid.uuid4().hex
-    if state is None:
+    if existing is None:
+        if not allow_create:
+            return None, "not_started"
         state = {
             "test_date": test_date,
             "ticker": ticker,
@@ -150,6 +154,7 @@ def _claim(
             logger.warning("스모크 테스트 상태 선점 실패: %s", exc)
             return None, "busy"
 
+    state = dict(existing)
     if state.get("status") in _TERMINAL:
         return state, "terminal"
     try:
@@ -264,7 +269,7 @@ def run_live_order_smoke_test(
     store: StateStore | None = None,
     sleep_fn=time.sleep,
 ) -> dict[str, Any]:
-    """Run or resume the one-time real-account order verification."""
+    """Start during the entry window, then recover unfinished orders at any later run."""
     now = now or get_now_kst()
     test_date = os.environ.get("LIVE_SMOKE_TEST_DATE", _DEFAULT_DATE).strip()
     ticker = os.environ.get("LIVE_SMOKE_TEST_TICKER", _DEFAULT_TICKER).strip()
@@ -278,21 +283,28 @@ def run_live_order_smoke_test(
         return {"attempted": False, "status": "dry_run", "halt_agent": False}
     if _env_bool("KIS_MOCK", True):
         return {"attempted": False, "status": "mock_account", "halt_agent": False}
-    if now.date().isoformat() != test_date:
-        return {"attempted": False, "status": "date_mismatch", "halt_agent": False}
-    if not (window_start <= now.time() <= window_end):
-        return {"attempted": False, "status": "outside_window", "halt_agent": False}
     if len(ticker) != 6 or not ticker.isdigit():
         return {"attempted": False, "status": "invalid_ticker", "halt_agent": False}
 
     try:
         store = store or GCSStateStore(test_date)
+        existing = store.load()
     except Exception as exc:
         return {"attempted": False, "status": "state_store_unavailable", "halt_agent": False, "error": str(exc)}
 
-    state, claim_status = _claim(store, now, test_date, ticker)
+    correct_date = now.date().isoformat() == test_date
+    inside_window = window_start <= now.time() <= window_end
+    allow_create = correct_date and inside_window
+
+    if existing is None and not allow_create:
+        status = "date_mismatch" if not correct_date else "outside_window"
+        return {"attempted": False, "status": status, "halt_agent": False}
+
+    state, claim_status = _claim(
+        store, existing, now, test_date, ticker, allow_create=allow_create
+    )
     if state is None:
-        return {"attempted": False, "status": claim_status, "halt_agent": False}
+        return {"attempted": False, "status": claim_status, "halt_agent": claim_status == "busy"}
     if claim_status in {"terminal", "busy"}:
         return {
             "attempted": False,
@@ -308,6 +320,14 @@ def run_live_order_smoke_test(
             state["initial_cash"] = int(initial.get("cash", 0) or 0)
             _save(store, state, now)
         initial_qty = int(state.get("initial_qty", 0) or 0)
+
+        # An interrupted run with a known extra holding always resumes at liquidation.
+        if state.get("status") == "recovery_required":
+            portfolio = broker.get_balance()
+            if _qty(portfolio, ticker) <= initial_qty:
+                return _complete(store, state, broker, portfolio, ticker, initial_qty, test_date, now)
+            state["status"] = "sell_intent"
+            _save(store, state, now)
 
         if state.get("status") == "claimed":
             price_info = broker.get_current_price(ticker)
@@ -423,13 +443,25 @@ def run_live_order_smoke_test(
     except Exception as exc:
         logger.exception("실계좌 주문 스모크 테스트 오류")
         state["error"] = str(exc)
+        initial_qty = int(state.get("initial_qty", 0) or 0)
         try:
             current_qty = _qty(broker.get_balance(), ticker)
+            pending_buy = _pending(broker, ticker, "BUY")
+            pending_sell = _pending(broker, ticker, "SELL")
         except Exception:
-            current_qty = int(state.get("initial_qty", 0) or 0)
-        initial_qty = int(state.get("initial_qty", 0) or 0)
+            current_qty, pending_buy, pending_sell = initial_qty, [], []
+
         if current_qty > initial_qty:
             state.update({"status": "recovery_required", "remaining_test_qty": current_qty - initial_qty})
+            halt_agent = True
+        elif pending_sell:
+            state["status"] = "sell_submitted"
+            halt_agent = True
+        elif pending_buy:
+            state["status"] = "buy_submitted"
+            halt_agent = True
+        elif state.get("status") in {"buy_filled", "sell_intent", "sell_submitted", "sell_pending", "sell_rejected", "recovery_required"}:
+            state["status"] = "recovery_required"
             halt_agent = True
         else:
             state["status"] = "failed_before_buy"
