@@ -26,10 +26,10 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Validate strategy and smoke-test runtime
+      - name: Validate strategy runtime
         run: |
           python -m unittest discover -s tests -v
-          python -m py_compile strategy/*.py ops/*.py tests/*.py config.py main.py agent/trader.py data/trade_log.py
+          python -m py_compile strategy/*.py tests/*.py config.py main.py agent/trader.py data/trade_log.py
 
       - id: auth
         uses: google-github-actions/auth@v2
@@ -115,7 +115,7 @@ jobs:
       - name: Update Cloud Run Job (Agent)
         run: |
           IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
-          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,GCS_TOKEN_BUCKET=$GCS_TOKEN_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=1,INNER_LOOP_SLEEP_SEC=90,LIVE_SMOKE_TEST_ENABLED=true,LIVE_SMOKE_TEST_DATE=2026-07-28,LIVE_SMOKE_TEST_TICKER=069500,LIVE_SMOKE_TEST_QTY=1,LIVE_SMOKE_TEST_MAX_PRICE=150000,LIVE_SMOKE_TEST_WINDOW_START=09:20,LIVE_SMOKE_TEST_WINDOW_END=10:30"
+          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,GCS_TOKEN_BUCKET=$GCS_TOKEN_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=1,INNER_LOOP_SLEEP_SEC=90"
           SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 600 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
           if gcloud run jobs describe $AGENT_JOB --region $REGION --quiet 2>/dev/null; then
