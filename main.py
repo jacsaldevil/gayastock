@@ -117,48 +117,12 @@ def run_trading(watchlist: list[str] | None = None):
     from agent.trader import TradingAgent
     from agent.tools import _broker, execute_tool
     from data.trade_log import log_agent_run
-    from ops.live_order_smoke_test import run_live_order_smoke_test
     from config import (
         TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_POSITIONS,
         INNER_LOOP_COUNT, INNER_LOOP_SLEEP_SEC, GEMINI_MODEL,
     )
-    broker = _broker()
-
-    # 2026-07-28 실계좌 주문 경로 1회 검증. 정확한 체결 수량만 다시 매도하며,
-    # 상태가 불완전하면 전략 에이전트를 중단해 테스트 포지션과 충돌하지 않게 한다.
-    smoke_result = run_live_order_smoke_test(broker)
-    smoke_status = str(smoke_result.get("status", ""))
-    if smoke_result.get("attempted") or smoke_status not in {
-        "disabled", "date_mismatch", "outside_window", "dry_run", "mock_account"
-    }:
-        logger.warning("실계좌 주문 스모크 테스트 상태: %s", smoke_result)
-    if smoke_result.get("halt_agent"):
-        summary = (
-            "실계좌 주문 스모크 테스트가 완전히 종료되지 않아 전략 실행을 중단했습니다. "
-            f"상태={smoke_status}. GCS ops 상태와 KIS 잔고/미체결 주문을 확인해야 합니다."
-        )
-        try:
-            portfolio_snapshot = broker.get_balance()
-        except Exception:
-            portfolio_snapshot = {}
-        log_agent_run(
-            watchlist=watchlist,
-            summary=summary,
-            portfolio_snapshot=portfolio_snapshot,
-            buy_tickers=[],
-            loops=[{
-                "loop": 0,
-                "result": summary,
-                "live_smoke_test": smoke_result,
-                "market_regime": None,
-                "llm": {"status": "skipped_for_smoke_test_recovery"},
-                "tool_log": [],
-            }],
-        )
-        logger.error(summary)
-        return
-
     agent = TradingAgent()
+    broker = _broker()
 
     logger.info("=" * 60)
     logger.info(
@@ -206,7 +170,6 @@ def run_trading(watchlist: list[str] | None = None):
         "started_at": get_now_kst().isoformat(),
         "total_loops": INNER_LOOP_COUNT,
         "current_loop": 0,
-        "live_smoke_test": smoke_result if smoke_result.get("attempted") else None,
         "loops": [],
     }
     _write_progress(progress)
@@ -224,8 +187,6 @@ def run_trading(watchlist: list[str] | None = None):
             "llm": None,
             "tool_log": [],
         }
-        if smoke_result.get("attempted"):
-            loop_entry["live_smoke_test"] = smoke_result
         loop_p: dict = {
             "loop": i + 1,
             "status": "checking",
@@ -234,8 +195,6 @@ def run_trading(watchlist: list[str] | None = None):
             "llm": None,
             "tool_log": [],
         }
-        if smoke_result.get("attempted"):
-            loop_p["live_smoke_test"] = smoke_result
         progress["current_loop"] = i + 1
         progress["loops"].append(loop_p)
         _write_progress(progress)
