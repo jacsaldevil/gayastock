@@ -17,10 +17,10 @@ def _pct_change(current: float, previous: float) -> float:
 def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.0) -> dict[str, Any]:
     """Classify the market using trend, momentum, drawdown, and realized volatility.
 
-    ``crash`` remains a hard block. Below the 60-day average, however, a verified
-    rebound or a mild recovery can open only the oversold-reversal setup with a
-    reduced position scale. This avoids remaining fully idle throughout a long
-    bear-market recovery while preserving strict exposure controls.
+    ``crash`` remains a hard block. Below the 60-day average, verified recovery
+    regimes can selectively open tightly controlled entries. A separate
+    ``volatile_rebound`` regime captures strong V-shaped recovery days without
+    treating them like ordinary low-volatility rebounds.
     """
     if len(candles) < 60:
         return {
@@ -82,8 +82,7 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             "reason": "급락 또는 극단 변동성 구간 — 신규 매수 금지",
         }
 
-    # 60일선 아래에서도 강한 당일 반등과 5일 모멘텀이 확인되면 제한 진입한다.
-    # 2026-07-15과 같은 V자 반등을 기존 규칙이 전부 차단하던 문제를 완화한다.
+    # 낮은 변동성의 정석 반등. 기존보다 큰 배율을 유지하되 과매도형만 허용한다.
     rebound = (
         close < ma60
         and close > ma5
@@ -99,7 +98,30 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             "status": "rebound",
             "buy_allowed": True,
             "recommended_buy_scale": 0.6,
-            "reason": "60일선 아래지만 단기 반등 확인 — 과매도 반전형만 60% 축소 규모 허용",
+            "reason": "60일선 아래지만 단기 반등 확인 — 과매도 반전형만 정상 규모의 60% 허용",
+        }
+
+    # 2026-07-31처럼 변동성은 높지만 가격·5일 모멘텀이 빠르게 복구되는 V자 반등.
+    # 오전 급등 직후 추격하지 않도록 MA5 괴리, 5일 수익률, 낙폭 회복을 함께 요구한다.
+    volatile_rebound = (
+        close < ma60
+        and close >= ma5 * 1.05
+        and 2.0 <= latest_change_pct <= 25.0
+        and return_5d_pct >= -0.5
+        and ma20_slope_pct > -8.0
+        and drawdown_20d_pct >= -25.0
+        and 5.5 <= realized_vol_20d_pct <= 8.0
+    )
+    if volatile_rebound:
+        return {
+            **metrics,
+            "status": "volatile_rebound",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.4,
+            "reason": (
+                "고변동성 V자 반등 확인 — 당일 +8% 이하의 주도주 반등형 또는 "
+                "과매도 반전형만 정상 규모의 40% 허용"
+            ),
         }
 
     # 완전한 반등에는 못 미쳐도 단기선 회복과 양의 모멘텀이 있으면 아주 제한적으로 탐색한다.
@@ -118,16 +140,38 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             "status": "risk_off_selective",
             "buy_allowed": True,
             "recommended_buy_scale": 0.35,
-            "reason": "60일선 아래의 제한적 회복 — 엄격한 과매도 반전형만 35% 축소 규모 허용",
+            "reason": "60일선 아래의 제한적 회복 — 엄격한 과매도 반전형만 정상 규모의 35% 허용",
         }
 
     if close < ma60:
+        failed_conditions: list[dict[str, Any]] = []
+        if close < ma5:
+            failed_conditions.append({"name": "close_vs_ma5", "value": round(close / ma5, 3), "required": ">= 1.0"})
+        if return_5d_pct < -2.0:
+            failed_conditions.append({"name": "return_5d_pct", "value": round(return_5d_pct, 2), "required": ">= -2.0"})
+        if ma20_slope_pct <= -8.0:
+            failed_conditions.append({"name": "ma20_slope_pct", "value": round(ma20_slope_pct, 2), "required": "> -8.0"})
+        if drawdown_20d_pct < -30.0:
+            failed_conditions.append({"name": "drawdown_20d_pct", "value": round(drawdown_20d_pct, 2), "required": ">= -30.0"})
+        if realized_vol_20d_pct >= 5.5:
+            failed_conditions.append({
+                "name": "realized_vol_20d_pct",
+                "value": round(realized_vol_20d_pct, 2),
+                "required": "< 5.5 or volatile_rebound 5.5~8.0",
+            })
+        reason = "60일선 하회 및 단기 회복 확인 부족 — 신규 매수 금지"
+        if failed_conditions:
+            failed_text = ", ".join(
+                f"{item['name']}={item['value']} ({item['required']})" for item in failed_conditions
+            )
+            reason = f"{reason} | 차단 조건: {failed_text}"
         return {
             **metrics,
             "status": "risk_off",
             "buy_allowed": False,
             "recommended_buy_scale": 0.0,
-            "reason": "60일선 하회 및 단기 회복 확인 부족 — 신규 매수 금지",
+            "failed_conditions": failed_conditions,
+            "reason": reason,
         }
 
     caution = close < ma20 or ma20_slope_pct < 0 or realized_vol_20d_pct >= 3.5 or return_5d_pct <= -4.0
@@ -202,7 +246,7 @@ def augment_technicals(
 
 
 def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[str, Any]:
-    """Validate one of three entry setups and return a setup-specific scale."""
+    """Validate a supported entry setup and return a setup-specific scale."""
     status = str(regime.get("status", "unknown"))
     if not regime.get("buy_allowed", False):
         return {"allowed": False, "setup": None, "setup_scale": 0.0, "reason": regime.get("reason", "시장 매수 금지")}
@@ -245,10 +289,32 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
     if leader_pullback:
         return {"allowed": True, "setup": "leader_pullback", "setup_scale": 1.0, "reason": "중기 주도주가 20일선 위에서 건전한 눌림목 형성"}
 
-    # 약세장에서는 이 한 가지 진입 유형만 허용한다. 스케일은 기존 0.5에서
-    # 0.8로 높이되 레짐 스케일과 리스크 예산이 최종 수량을 다시 제한한다.
+    # 고변동성 V자 반등장에서는 시장보다 먼저 회복한 종목만 제한적으로 추종한다.
+    # 개별 종목 당일 +8% 초과 추격, MA20 미회복, 거래량 없는 반등은 허용하지 않는다.
+    volatile_rebound_leader = (
+        status == "volatile_rebound"
+        and weekly in ("up", "sideways")
+        and bb in ("middle", "upper_touch")
+        and 48 <= rsi <= 68
+        and 0.8 <= change <= 8.0
+        and ret5 >= 0.0
+        and ret20 >= -3.0
+        and breakout >= -5.0
+        and volume_pace >= 1.1
+        and above_ma5
+        and above_ma20
+        and atr_pct <= 8.0
+    )
+    if volatile_rebound_leader:
+        return {
+            "allowed": True,
+            "setup": "volatile_rebound_leader",
+            "setup_scale": 0.8,
+            "reason": "고변동성 반등장에서 MA20·거래량을 회복한 주도주 확인",
+        }
+
     oversold_reversal = (
-        status in ("risk_off_selective", "rebound", "caution", "risk_on")
+        status in ("risk_off_selective", "rebound", "volatile_rebound", "caution", "risk_on")
         and weekly in ("up", "sideways")
         and bb in ("below_lower", "lower_touch")
         and 25 <= rsi <= 45
