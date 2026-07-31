@@ -29,6 +29,20 @@ def recovering_bear_market_closes():
     return [200 - i * 1.0 for i in range(70)] + [130, 131, 132, 133, 134, 136, 138, 140, 142, 145]
 
 
+def volatile_rebound_closes():
+    return [140 - i * 0.4 for i in range(60)] + [
+        115, 108, 112, 104, 110, 102, 109, 101, 108, 100,
+        107, 99, 106, 98, 100, 93, 96, 98, 102, 108,
+    ]
+
+
+def extreme_volatility_closes():
+    return [140 - i * 0.4 for i in range(60)] + [
+        115, 100, 114, 98, 112, 96, 110, 94, 108, 92,
+        106, 90, 104, 88, 100, 90, 95, 98, 103, 108,
+    ]
+
+
 class StrategyRulesTest(unittest.TestCase):
     def test_crash_blocks_new_buys(self):
         closes = [100 + i * 0.5 for i in range(79)] + [90]
@@ -43,6 +57,25 @@ class StrategyRulesTest(unittest.TestCase):
         self.assertEqual(regime["status"], "rebound")
         self.assertTrue(regime["buy_allowed"])
         self.assertEqual(regime["recommended_buy_scale"], 0.6)
+
+    def test_volatile_rebound_allows_small_entries(self):
+        regime = evaluate_market_regime(
+            candles_from_closes(volatile_rebound_closes(), latest_change=8.0)
+        )
+        self.assertEqual(regime["status"], "volatile_rebound")
+        self.assertTrue(regime["buy_allowed"])
+        self.assertEqual(regime["recommended_buy_scale"], 0.4)
+        self.assertGreaterEqual(regime["realized_vol_20d_pct"], 5.5)
+        self.assertLessEqual(regime["realized_vol_20d_pct"], 8.0)
+
+    def test_extreme_volatility_still_blocks_entries(self):
+        regime = evaluate_market_regime(
+            candles_from_closes(extreme_volatility_closes(), latest_change=8.0)
+        )
+        self.assertEqual(regime["status"], "risk_off")
+        self.assertFalse(regime["buy_allowed"])
+        names = [item["name"] for item in regime["failed_conditions"]]
+        self.assertIn("realized_vol_20d_pct", names)
 
     def test_mild_recovery_uses_selective_risk_off(self):
         regime = evaluate_market_regime(
@@ -90,6 +123,51 @@ class StrategyRulesTest(unittest.TestCase):
             "breakout_pct": -1.0,
             "volume_pace_ratio": 1.8,
             "atr14_pct": 4.0,
+            "above_ma5": True,
+            "above_ma20": True,
+        }
+        self.assertFalse(classify_entry(regime, tech)["allowed"])
+
+    def test_volatile_rebound_leader_is_allowed(self):
+        regime = {
+            "status": "volatile_rebound",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.4,
+        }
+        tech = {
+            "bb_position": "middle",
+            "rsi": 61,
+            "weekly_trend": "up",
+            "change_rate": 4.5,
+            "return_5d_pct": 3.0,
+            "return_20d_pct": 2.0,
+            "breakout_pct": -1.5,
+            "volume_pace_ratio": 1.4,
+            "atr14_pct": 6.0,
+            "above_ma5": True,
+            "above_ma20": True,
+        }
+        entry = classify_entry(regime, tech)
+        self.assertTrue(entry["allowed"])
+        self.assertEqual(entry["setup"], "volatile_rebound_leader")
+        self.assertEqual(entry["setup_scale"], 0.8)
+
+    def test_volatile_rebound_does_not_chase_stock_above_eight_percent(self):
+        regime = {
+            "status": "volatile_rebound",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.4,
+        }
+        tech = {
+            "bb_position": "upper_touch",
+            "rsi": 64,
+            "weekly_trend": "up",
+            "change_rate": 9.0,
+            "return_5d_pct": 5.0,
+            "return_20d_pct": 8.0,
+            "breakout_pct": 1.0,
+            "volume_pace_ratio": 1.8,
+            "atr14_pct": 6.0,
             "above_ma5": True,
             "above_ma20": True,
         }
@@ -146,6 +224,20 @@ class StrategyRulesTest(unittest.TestCase):
         )
         self.assertGreaterEqual(sized["quantity"], 1)
         self.assertLessEqual(sized["max_amount"], 55_000)
+
+    def test_volatile_rebound_scale_can_buy_one_moderate_price_share(self):
+        sized = calculate_position_size(
+            price=30_000,
+            cash=283_606,
+            total_eval=283_606,
+            holdings_eval=0,
+            atr_pct=6.0,
+            regime_scale=0.4,
+            setup_scale=0.8,
+            max_buy_amount=500_000,
+        )
+        self.assertEqual(sized["quantity"], 1)
+        self.assertLessEqual(sized["max_amount"], 37_000)
 
     def test_selective_risk_off_can_buy_one_lower_price_share(self):
         sized = calculate_position_size(
