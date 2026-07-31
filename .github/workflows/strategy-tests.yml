@@ -17,6 +17,9 @@ jobs:
         with:
           python-version: "3.12"
       - name: Run strategy tests
-        run: python -m unittest discover -s tests -p "test_strategy_rules.py" -v
-      - name: Compile changed runtime modules
-        run: python -m py_compile strategy/*.py tests/*.py config.py main.py agent/trader.py data/trade_log.py
+        run: python -m unittest discover -s tests -v
+      - name: Compile runtime modules
+        run: >-
+          python -m py_compile
+          strategy/*.py tests/*.py config.py main.py
+          agent/*.py broker/*.py data/*.py
