@@ -82,7 +82,7 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             "reason": "급락 또는 극단 변동성 구간 — 신규 매수 금지",
         }
 
-    # 낮은 변동성의 정석 반등. 기존보다 큰 배율을 유지하되 과매도형만 허용한다.
+    # 낮은 변동성의 정석 반등. 5.5% 이상 변동성은 volatile_rebound로 분리한다.
     rebound = (
         close < ma60
         and close > ma5
@@ -90,7 +90,7 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
         and return_5d_pct >= 0.0
         and ma20_slope_pct > -7.0
         and drawdown_20d_pct >= -30.0
-        and realized_vol_20d_pct < 6.0
+        and realized_vol_20d_pct < 5.5
     )
     if rebound:
         return {
@@ -262,6 +262,15 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
     atr_pct = float(technicals.get("atr14_pct", 100) or 100)
     above_ma5 = bool(technicals.get("above_ma5", False))
     above_ma20 = bool(technicals.get("above_ma20", False))
+
+    # 모든 진입 유형에 공통으로 개별 종목 당일 +8% 초과 추격을 금지한다.
+    if change > 8.0:
+        return {
+            "allowed": False,
+            "setup": None,
+            "setup_scale": 0.0,
+            "reason": f"당일 상승률 {change:.1f}% — +8% 초과 추격 매수 금지",
+        }
 
     momentum_breakout = (
         status == "risk_on"
