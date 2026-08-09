@@ -28,7 +28,7 @@ def _steady_high_vol_recovery(result: dict[str, Any]) -> bool:
     volatility = _metric(result, "realized_vol_20d_pct")
 
     return (
-        result.get("status") == "risk_off"
+        result.get("status") in ("risk_off", "risk_off_selective")
         and close < ma60
         and ma5 > 0
         and close >= ma5 * 1.02
@@ -67,7 +67,7 @@ def _high_vol_failed_conditions(result: dict[str, Any]) -> list[dict[str, Any]]:
     return failed
 
 
-def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.0) -> dict[str, Any]:
+def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -5.0) -> dict[str, Any]:
     """Extend the base regime classifier with a smaller steady-recovery path."""
     result = _base_evaluate_market_regime(candles, crash_pct=crash_pct)
     if _steady_high_vol_recovery(result):
@@ -75,15 +75,15 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             **result,
             "status": "volatile_rebound",
             "buy_allowed": True,
-            "recommended_buy_scale": 0.35,
+            "recommended_buy_scale": 0.5,
             "failed_conditions": [],
             "reason": (
                 "고변동성 완만 회복 확인 — MA5 2% 상회·5일 모멘텀 양수. "
-                "주도주 반등형 또는 과매도 반전형만 정상 규모의 35% 허용"
+                "주도주 반등형 또는 과매도 반전형만 정상 규모의 50% 허용"
             ),
         }
 
-    if result.get("status") == "risk_off":
+    if result.get("status") in ("risk_off", "risk_off_selective"):
         volatility = _metric(result, "realized_vol_20d_pct")
         if 5.5 <= volatility <= 8.0:
             existing = [
@@ -92,7 +92,10 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             ]
             high_vol_failed = _high_vol_failed_conditions(result)
             failed = existing + [item for item in high_vol_failed if item not in existing]
-            reason = "60일선 하회 및 고변동성 회복 확인 부족 — 신규 매수 금지"
+            if result.get("buy_allowed", False):
+                reason = "60일선 하회 및 고변동성 회복 확인 부족 — 강한 개별 종목만 축소 진입"
+            else:
+                reason = "60일선 하회 및 고변동성 회복 확인 부족 — 신규 매수 금지"
             if failed:
                 details = ", ".join(
                     f"{item['name']}={item['value']} ({item['required']})" for item in failed

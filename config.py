@@ -39,7 +39,7 @@ MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "20"))  # 최대 보유 영업일
 
 # 시장 레짐 필터 (KODEX 200을 코스피 대형주 프록시로 사용)
 MARKET_PROXY_TICKER = os.getenv("MARKET_PROXY_TICKER", "069500")
-MARKET_CRASH_PCT = float(os.getenv("MARKET_CRASH_PCT", "-4.0"))
+MARKET_CRASH_PCT = float(os.getenv("MARKET_CRASH_PCT", "-5.0"))
 
 # 기존 도구 호환용 RSI 상한. v9 실제 진입 상한은 setup별 규칙에서 별도 검증.
 RSI_MAX_ENTRY = float(os.getenv("RSI_MAX_ENTRY", "72.0"))

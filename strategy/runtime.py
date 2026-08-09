@@ -2,7 +2,7 @@
 
 This module keeps broker/API plumbing in ``agent.tools`` while replacing the
 market-regime, candidate ranking, technical enrichment, and buy validation
-paths with deterministic v9 rules.
+paths with deterministic v11 rules.
 """
 from __future__ import annotations
 
@@ -274,7 +274,7 @@ def _buy_stock(tool_input: dict[str, Any]) -> str:
     if result.get("success"):
         base_tools._daily_buy_count[ticker] = buy_count + 1
         logger.info(
-            "전략 v9 매수 승인: %s %d주 setup=%s scale=%s",
+            "전략 v11 매수 승인: %s %d주 setup=%s scale=%s",
             ticker, approved_qty, entry.get("setup"), sizing.get("effective_scale"),
         )
     return json.dumps(result, ensure_ascii=False)
@@ -305,5 +305,5 @@ def execute_tool(tool_name: str, tool_input: dict[str, Any]) -> str:
             raise RuntimeError("기존 execute_tool이 설치되지 않았습니다")
         return _BASE_EXECUTE_TOOL(tool_name, tool_input)
     except Exception as exc:
-        logger.exception("전략 v9 tool 실행 실패: %s", tool_name)
+        logger.exception("전략 v11 tool 실행 실패: %s", tool_name)
         return json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)

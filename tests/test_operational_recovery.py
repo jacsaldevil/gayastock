@@ -37,15 +37,16 @@ class OperationalRecoveryTest(unittest.TestCase):
         )
         self.assertEqual(regime["status"], "volatile_rebound")
         self.assertTrue(regime["buy_allowed"])
-        self.assertEqual(regime["recommended_buy_scale"], 0.35)
+        self.assertEqual(regime["recommended_buy_scale"], 0.5)
         self.assertIn("완만 회복", regime["reason"])
 
-    def test_high_vol_recovery_requires_positive_intraday_confirmation(self):
+    def test_high_vol_without_positive_confirmation_stays_small_selective(self):
         regime = evaluate_market_regime(
             candles_from_closes(volatile_recovery_closes(), latest_change=-0.6)
         )
-        self.assertEqual(regime["status"], "risk_off")
-        self.assertFalse(regime["buy_allowed"])
+        self.assertEqual(regime["status"], "risk_off_selective")
+        self.assertTrue(regime["buy_allowed"])
+        self.assertEqual(regime["recommended_buy_scale"], 0.4)
         names = [item["name"] for item in regime.get("failed_conditions", [])]
         self.assertIn("change_rate_high_vol", names)
         self.assertNotIn("realized_vol_20d_pct", names)

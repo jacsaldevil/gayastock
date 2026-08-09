@@ -27,7 +27,7 @@ class StrategyHardeningTest(unittest.TestCase):
         self.assertGreaterEqual(regime["realized_vol_20d_pct"], 5.5)
         self.assertLess(regime["realized_vol_20d_pct"], 6.0)
         self.assertEqual(regime["status"], "volatile_rebound")
-        self.assertEqual(regime["recommended_buy_scale"], 0.4)
+        self.assertEqual(regime["recommended_buy_scale"], 0.5)
 
     def test_eight_percent_cap_applies_to_oversold_reversal(self):
         regime = {

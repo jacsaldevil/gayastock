@@ -187,8 +187,9 @@ GEMINI_TOOLS = Tool(
             name="get_market_regime",
             description=(
                 "코스피 대형주 프록시(KODEX 200)로 시장 레짐을 확인합니다. "
-                "매수 전 반드시 호출하세요. status는 risk_on/caution/risk_off/crash/unknown 중 하나이며, "
-                "buy_allowed=false이면 신규 매수 금지, caution이면 recommended_buy_scale에 맞춰 절반 수량만 매수하세요."
+                "매수 전 반드시 호출하세요. status는 risk_on/caution/rebound/volatile_rebound/"
+                "risk_off_selective/crash_selective/crash/unknown 중 하나이며, "
+                "buy_allowed=false이면 신규 매수 금지입니다. true이면 후보를 탐색하고 recommended_buy_scale에 맞추세요."
             ),
             parameters={
                 "type": "object",
@@ -205,9 +206,9 @@ GEMINI_TOOLS = Tool(
             description=(
                 "주식을 매수합니다. "
                 "매수 전 get_market_regime의 buy_allowed=true와 "
-                "get_technical_indicators의 주봉 우상향(up)을 반드시 확인하세요. "
-                "진입은 과매도형(BB 하단+RSI≤35) 또는 주도주 눌림목형(BB middle/lower_touch + RSI≤55) 중 하나여야 합니다. "
-                "포지션 사이징: risk_on은 가용예수금 × 30~40% ÷ 남은 슬롯 수, caution은 그 절반 이하로 계산하세요."
+                "get_technical_indicators로 코드 진입 조건을 확인하세요. "
+                "진입은 과매도 반전, 상대강도 회복, 주도주 눌림목, 돌파형 중 하나여야 합니다. "
+                "약세 레짐에서도 buy_allowed=true이면 후보를 탐색하며, 최종 수량은 코드가 자동 축소합니다."
             ),
             parameters={
                 "type": "object",

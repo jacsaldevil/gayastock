@@ -43,6 +43,13 @@ def extreme_volatility_closes():
     ]
 
 
+def recent_shock_closes():
+    return [150.0] * 60 + [
+        150, 135, 150, 134, 149, 133, 148, 132, 147, 131,
+        146, 130, 145, 129, 142, 138, 132, 126, 120, 115,
+    ]
+
+
 class StrategyRulesTest(unittest.TestCase):
     def test_crash_blocks_new_buys(self):
         closes = [100 + i * 0.5 for i in range(79)] + [90]
@@ -56,7 +63,7 @@ class StrategyRulesTest(unittest.TestCase):
         )
         self.assertEqual(regime["status"], "rebound")
         self.assertTrue(regime["buy_allowed"])
-        self.assertEqual(regime["recommended_buy_scale"], 0.6)
+        self.assertEqual(regime["recommended_buy_scale"], 0.7)
 
     def test_volatile_rebound_allows_small_entries(self):
         regime = evaluate_market_regime(
@@ -64,16 +71,16 @@ class StrategyRulesTest(unittest.TestCase):
         )
         self.assertEqual(regime["status"], "volatile_rebound")
         self.assertTrue(regime["buy_allowed"])
-        self.assertEqual(regime["recommended_buy_scale"], 0.4)
+        self.assertEqual(regime["recommended_buy_scale"], 0.5)
         self.assertGreaterEqual(regime["realized_vol_20d_pct"], 5.5)
         self.assertLessEqual(regime["realized_vol_20d_pct"], 8.0)
 
-    def test_extreme_volatility_still_blocks_entries(self):
+    def test_extreme_volatility_without_same_day_crash_keeps_scanning(self):
         regime = evaluate_market_regime(
             candles_from_closes(extreme_volatility_closes(), latest_change=8.0)
         )
-        self.assertEqual(regime["status"], "risk_off")
-        self.assertFalse(regime["buy_allowed"])
+        self.assertEqual(regime["status"], "risk_off_selective")
+        self.assertTrue(regime["buy_allowed"])
         names = [item["name"] for item in regime["failed_conditions"]]
         self.assertIn("realized_vol_20d_pct", names)
 
@@ -83,14 +90,25 @@ class StrategyRulesTest(unittest.TestCase):
         )
         self.assertEqual(regime["status"], "risk_off_selective")
         self.assertTrue(regime["buy_allowed"])
-        self.assertEqual(regime["recommended_buy_scale"], 0.35)
+        self.assertEqual(regime["recommended_buy_scale"], 0.5)
 
-    def test_negative_risk_off_still_blocks_entries(self):
+    def test_negative_risk_off_keeps_selective_entries_open(self):
         regime = evaluate_market_regime(
             candles_from_closes(recovering_bear_market_closes(), latest_change=-1.0)
         )
-        self.assertEqual(regime["status"], "risk_off")
-        self.assertFalse(regime["buy_allowed"])
+        self.assertEqual(regime["status"], "risk_off_selective")
+        self.assertTrue(regime["buy_allowed"])
+        self.assertEqual(regime["recommended_buy_scale"], 0.4)
+
+    def test_recent_shock_is_selective_instead_of_hard_blocked(self):
+        regime = evaluate_market_regime(
+            candles_from_closes(recent_shock_closes(), latest_change=-0.8)
+        )
+        self.assertEqual(regime["status"], "crash_selective")
+        self.assertTrue(regime["buy_allowed"])
+        self.assertEqual(regime["recommended_buy_scale"], 0.35)
+        self.assertLessEqual(regime["return_5d_pct"], -6.0)
+        self.assertGreaterEqual(regime["realized_vol_20d_pct"], 5.0)
 
     def test_momentum_breakout_allows_upper_band(self):
         regime = {"status": "risk_on", "buy_allowed": True, "recommended_buy_scale": 1.0}
@@ -196,6 +214,42 @@ class StrategyRulesTest(unittest.TestCase):
         self.assertTrue(entry["allowed"])
         self.assertEqual(entry["setup"], "oversold_reversal")
         self.assertEqual(entry["setup_scale"], 0.8)
+
+    def test_crash_selective_allows_relative_strength_recovery(self):
+        regime = {
+            "status": "crash_selective",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.35,
+        }
+        tech = {
+            "bb_position": "middle",
+            "rsi": 55,
+            "weekly_trend": "sideways",
+            "change_rate": 1.2,
+            "return_5d_pct": -1.0,
+            "return_20d_pct": -4.0,
+            "breakout_pct": -7.0,
+            "volume_pace_ratio": 1.2,
+            "atr14_pct": 6.0,
+            "above_ma5": True,
+            "above_ma20": False,
+        }
+        entry = classify_entry(regime, tech)
+        self.assertTrue(entry["allowed"])
+        self.assertEqual(entry["setup"], "relative_strength_recovery")
+
+    def test_crash_selective_scale_can_buy_one_moderate_price_share(self):
+        sized = calculate_position_size(
+            price=30_000,
+            cash=283_606,
+            total_eval=283_606,
+            holdings_eval=0,
+            atr_pct=6.0,
+            regime_scale=0.35,
+            setup_scale=0.8,
+            max_buy_amount=500_000,
+        )
+        self.assertEqual(sized["quantity"], 1)
 
     def test_position_size_is_risk_capped(self):
         sized = calculate_position_size(

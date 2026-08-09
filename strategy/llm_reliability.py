@@ -10,20 +10,15 @@ logger = logging.getLogger(__name__)
 _DEFAULT_DELAYS = (5, 15)
 _POLICY_NOTE = """
 
-## 운영 보완 — 고변동성 완만 회복
+## 운영 보완 — 약세장 선별 진입
 
-기존 강한 V자 반등 외에도 다음 조건을 모두 충족하면 `volatile_rebound`로 분류합니다.
+당일 시장이 -5% 이하로 폭락한 경우만 신규 매수를 전면 금지합니다.
+최근 5일 급락·고변동성 또는 60일선 하회 상태라도 `buy_allowed=true`이면 반드시
+거래대금 후보를 탐색하고, 과매도 반전·상대강도 회복 종목을 소규모로 검토합니다.
+`crash_selective`는 정상 규모의 35%, `risk_off_selective`는 40~50%만 허용합니다.
 
-- 시장 프록시가 MA5보다 최소 2% 위
-- 당일 상승률 +0.3%~+8%
-- 5일 수익률 +1% 이상
-- MA20 기울기 -8%보다 양호
-- 20일 낙폭 -25% 이상
-- 20일 실현변동성 5.5%~8%
-
-이 완만 회복 경로의 시장 배율은 0.35입니다. 개별 종목은 기존
-`volatile_rebound_leader` 또는 `oversold_reversal` 코드 검증을 그대로 통과해야 하며,
-당일 +8% 초과 추격 금지와 09:10~15:20 매수 시간 제한을 유지합니다.
+시장보다 먼저 MA5와 거래량을 회복한 종목은 `relative_strength_recovery`로 진입할 수 있습니다.
+당일 +8% 초과 추격 금지, 09:10~15:20 매수 시간, 손절·수량 제한은 그대로 유지합니다.
 """
 
 
@@ -69,7 +64,7 @@ def install() -> None:
     if getattr(trader, "_LLM_RELIABILITY_INSTALLED", False):
         return
 
-    if "## 운영 보완 — 고변동성 완만 회복" not in trader.SYSTEM_PROMPT:
+    if "## 운영 보완 — 약세장 선별 진입" not in trader.SYSTEM_PROMPT:
         trader.SYSTEM_PROMPT += _POLICY_NOTE
 
     original_run = trader.TradingAgent.run

@@ -14,13 +14,12 @@ def _pct_change(current: float, previous: float) -> float:
     return (current - previous) / previous * 100 if previous else 0.0
 
 
-def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.0) -> dict[str, Any]:
+def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -5.0) -> dict[str, Any]:
     """Classify the market using trend, momentum, drawdown, and realized volatility.
 
-    ``crash`` remains a hard block. Below the 60-day average, verified recovery
-    regimes can selectively open tightly controlled entries. A separate
-    ``volatile_rebound`` regime captures strong V-shaped recovery days without
-    treating them like ordinary low-volatility rebounds.
+    Only a severe same-day crash remains a hard block. Recent drawdowns and a
+    falling 60-day trend still reduce position size, but they keep candidate
+    discovery open so individually recovering leaders can trade selectively.
     """
     if len(candles) < 60:
         return {
@@ -72,14 +71,27 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
         "change_rate": round(latest_change_pct, 2),
     }
 
-    # 급락일은 기존과 동일하게 신규 매수 전면 차단한다.
-    if latest_change_pct <= crash_pct or (realized_vol_20d_pct >= 5.0 and return_5d_pct <= -6.0):
+    # 당일 실제 폭락만 전면 차단한다. 최근 급락 이력만으로 다음 거래일까지
+    # 후보 탐색을 통째로 중단하지 않는다.
+    if latest_change_pct <= crash_pct:
         return {
             **metrics,
             "status": "crash",
             "buy_allowed": False,
             "recommended_buy_scale": 0.0,
-            "reason": "급락 또는 극단 변동성 구간 — 신규 매수 금지",
+            "reason": f"당일 시장 급락({latest_change_pct:.1f}% <= {crash_pct:.1f}%) — 신규 매수 금지",
+        }
+
+    # 고변동성 + 최근 5일 급락은 전면 금지 대신 초소형 선별 진입으로 전환한다.
+    # 개별 종목은 classify_entry의 반전/상대강도 조건을 별도로 통과해야 한다.
+    recent_shock = realized_vol_20d_pct >= 5.0 and return_5d_pct <= -6.0
+    if recent_shock:
+        return {
+            **metrics,
+            "status": "crash_selective",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.35,
+            "reason": "최근 급락·고변동성 지속 — 후보 탐색 후 반전/상대강도 종목만 정상 규모의 35% 허용",
         }
 
     # 낮은 변동성의 정석 반등. 5.5% 이상 변동성은 volatile_rebound로 분리한다.
@@ -97,8 +109,8 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             **metrics,
             "status": "rebound",
             "buy_allowed": True,
-            "recommended_buy_scale": 0.6,
-            "reason": "60일선 아래지만 단기 반등 확인 — 과매도 반전형만 정상 규모의 60% 허용",
+            "recommended_buy_scale": 0.7,
+            "reason": "60일선 아래지만 단기 반등 확인 — 선별 진입을 정상 규모의 70% 허용",
         }
 
     # 2026-07-31처럼 변동성은 높지만 가격·5일 모멘텀이 빠르게 복구되는 V자 반등.
@@ -117,10 +129,10 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             **metrics,
             "status": "volatile_rebound",
             "buy_allowed": True,
-            "recommended_buy_scale": 0.4,
+            "recommended_buy_scale": 0.5,
             "reason": (
                 "고변동성 V자 반등 확인 — 당일 +8% 이하의 주도주 반등형 또는 "
-                "과매도 반전형만 정상 규모의 40% 허용"
+                "과매도 반전형만 정상 규모의 50% 허용"
             ),
         }
 
@@ -139,8 +151,8 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             **metrics,
             "status": "risk_off_selective",
             "buy_allowed": True,
-            "recommended_buy_scale": 0.35,
-            "reason": "60일선 아래의 제한적 회복 — 엄격한 과매도 반전형만 정상 규모의 35% 허용",
+            "recommended_buy_scale": 0.5,
+            "reason": "60일선 아래의 제한적 회복 — 반전/상대강도 종목을 정상 규모의 50% 허용",
         }
 
     if close < ma60:
@@ -159,17 +171,17 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
                 "value": round(realized_vol_20d_pct, 2),
                 "required": "< 5.5 or volatile_rebound 5.5~8.0",
             })
-        reason = "60일선 하회 및 단기 회복 확인 부족 — 신규 매수 금지"
+        reason = "60일선 하회 및 단기 회복 확인 부족 — 후보 탐색 후 강한 개별 종목만 40% 규모 허용"
         if failed_conditions:
             failed_text = ", ".join(
                 f"{item['name']}={item['value']} ({item['required']})" for item in failed_conditions
             )
-            reason = f"{reason} | 차단 조건: {failed_text}"
+            reason = f"{reason} | 시장 회복 미충족 항목: {failed_text}"
         return {
             **metrics,
-            "status": "risk_off",
-            "buy_allowed": False,
-            "recommended_buy_scale": 0.0,
+            "status": "risk_off_selective",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.4,
             "failed_conditions": failed_conditions,
             "reason": reason,
         }
@@ -180,8 +192,8 @@ def evaluate_market_regime(candles: list[dict[str, Any]], crash_pct: float = -4.
             **metrics,
             "status": "caution",
             "buy_allowed": True,
-            "recommended_buy_scale": 0.5,
-            "reason": "중기 추세는 유지되나 단기 약세/고변동성 — 절반 규모 허용",
+            "recommended_buy_scale": 0.7,
+            "reason": "중기 추세는 유지되나 단기 약세/고변동성 — 정상 규모의 70% 허용",
         }
 
     return {
@@ -273,7 +285,7 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
         }
 
     momentum_breakout = (
-        status == "risk_on"
+        status in ("risk_on", "caution", "rebound", "volatile_rebound")
         and weekly == "up"
         and bb in ("middle", "upper_touch", "above_upper")
         and 55 <= rsi <= 72
@@ -286,7 +298,10 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
         return {"allowed": True, "setup": "momentum_breakout", "setup_scale": 0.7, "reason": "주도주 20일 신고가 돌파 + 거래량 속도 확인"}
 
     leader_pullback = (
-        status in ("risk_on", "caution")
+        status in (
+            "crash_selective", "risk_off_selective", "rebound",
+            "volatile_rebound", "risk_on", "caution",
+        )
         and weekly == "up"
         and bb in ("middle", "lower_touch")
         and 38 <= rsi <= 62
@@ -323,16 +338,39 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
         }
 
     oversold_reversal = (
-        status in ("risk_off_selective", "rebound", "volatile_rebound", "caution", "risk_on")
-        and weekly in ("up", "sideways")
+        status in (
+            "crash_selective", "risk_off_selective", "rebound",
+            "volatile_rebound", "caution", "risk_on",
+        )
+        and weekly in ("up", "sideways", "down")
         and bb in ("below_lower", "lower_touch")
-        and 25 <= rsi <= 45
-        and (above_ma5 or change >= 0.8)
-        and ret5 >= -12.0
-        and atr_pct <= 8.0
+        and 22 <= rsi <= 48
+        and (above_ma5 or change >= 0.3)
+        and ret5 >= -15.0
+        and atr_pct <= 10.0
     )
     if oversold_reversal:
         return {"allowed": True, "setup": "oversold_reversal", "setup_scale": 0.8, "reason": "과매도 구간에서 단기 반전 확인"}
+
+    # 약세장에서도 시장보다 먼저 회복하는 종목은 소규모로 진입한다.
+    relative_strength_recovery = (
+        status in ("crash_selective", "risk_off_selective", "rebound", "volatile_rebound", "caution")
+        and weekly in ("up", "sideways")
+        and bb in ("lower_touch", "middle", "upper_touch")
+        and 40 <= rsi <= 68
+        and 0.3 <= change <= 8.0
+        and ret5 >= -3.0
+        and volume_pace >= 1.0
+        and above_ma5
+        and atr_pct <= 9.0
+    )
+    if relative_strength_recovery:
+        return {
+            "allowed": True,
+            "setup": "relative_strength_recovery",
+            "setup_scale": 0.8,
+            "reason": "약세장에서도 MA5·거래량·단기 상대강도를 먼저 회복",
+        }
 
     return {
         "allowed": False,
