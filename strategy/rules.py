@@ -257,6 +257,116 @@ def augment_technicals(
     return result
 
 
+def pre_score_candidate(
+    item: dict[str, Any],
+    candles: list[dict[str, Any]],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Score a liquid candidate before the LLM chooses what to inspect.
+
+    The pre-score intentionally uses daily data only. Weekly trend is still
+    fetched by ``get_technical_indicators`` before any order, while new stocks
+    without enough daily history and obvious chase entries are removed here.
+    """
+    ticker = str(item.get("ticker", ""))
+    current_price = float(item.get("current_price", 0) or 0)
+    if len(candles) < 25:
+        return {
+            "eligible": False,
+            "ticker": ticker,
+            "reason": f"일봉 데이터 부족: {len(candles)}개 (최소 25개 필요)",
+        }
+    if current_price <= 0:
+        return {"eligible": False, "ticker": ticker, "reason": "현재가 오류"}
+
+    closes = [float(c.get("close", 0) or 0) for c in candles]
+    if any(close <= 0 for close in closes[-25:]):
+        return {"eligible": False, "ticker": ticker, "reason": "유효하지 않은 최근 일봉 종가"}
+
+    recent = closes[-20:]
+    bb_middle = _mean(recent)
+    variance = _mean([(close - bb_middle) ** 2 for close in recent])
+    std = variance ** 0.5
+    bb_upper = bb_middle + 2 * std
+    bb_lower = bb_middle - 2 * std
+    band_half = bb_upper - bb_middle
+    if current_price <= bb_lower:
+        bb_position = "below_lower"
+    elif current_price <= bb_lower + band_half * 0.15:
+        bb_position = "lower_touch"
+    elif current_price >= bb_upper:
+        bb_position = "above_upper"
+    elif current_price >= bb_upper - band_half * 0.15:
+        bb_position = "upper_touch"
+    else:
+        bb_position = "middle"
+
+    gains: list[float] = []
+    losses: list[float] = []
+    for index in range(1, len(closes)):
+        change = closes[index] - closes[index - 1]
+        gains.append(max(change, 0.0))
+        losses.append(max(-change, 0.0))
+    avg_gain = _mean(gains[:14])
+    avg_loss = _mean(losses[:14])
+    for index in range(14, len(gains)):
+        avg_gain = (avg_gain * 13 + gains[index]) / 14
+        avg_loss = (avg_loss * 13 + losses[index]) / 14
+    rsi = 100.0 if avg_loss == 0 else 100 - 100 / (1 + avg_gain / avg_loss)
+
+    technicals = augment_technicals(
+        {
+            "bb_position": bb_position,
+            "rsi": round(rsi, 2),
+            "change_rate": float(item.get("change_rate", 0) or 0),
+        },
+        candles,
+        current_price,
+        now=now,
+    )
+    change_rate = float(technicals.get("change_rate", 0) or 0)
+    if change_rate > 8.0:
+        return {
+            "eligible": False,
+            "ticker": ticker,
+            "reason": f"당일 상승률 {change_rate:.1f}% — +8% 초과 추격 금지",
+        }
+
+    rsi = float(technicals.get("rsi", 100) or 100)
+    ret5 = float(technicals.get("return_5d_pct", -100) or -100)
+    ret20 = float(technicals.get("return_20d_pct", -100) or -100)
+    atr_pct = float(technicals.get("atr14_pct", 100) or 100)
+    score = 0.0
+    score += 20 if 22 <= rsi <= 68 else -15
+    score += {
+        "below_lower": 15,
+        "lower_touch": 20,
+        "middle": 20,
+        "upper_touch": 5,
+        "above_upper": -20,
+    }.get(bb_position, -10)
+    score += 20 if technicals.get("above_ma5") else 0
+    score += 10 if technicals.get("above_ma20") else 0
+    score += 15 if ret5 >= -3 else (5 if ret5 >= -15 else -15)
+    score += 5 if ret20 >= 3 else 0
+    score += 15 if atr_pct <= 10 else (10 if atr_pct <= 12 else (2 if atr_pct <= 14 else -15))
+    score += 15 if 0.3 <= change_rate <= 8 else (5 if -3 <= change_rate < 0.3 else -10)
+
+    return {
+        "eligible": True,
+        "ticker": ticker,
+        "pre_score": round(score, 2),
+        "bb_position_precheck": bb_position,
+        "rsi_precheck": round(rsi, 2),
+        "return_5d_pct": technicals.get("return_5d_pct"),
+        "return_20d_pct": technicals.get("return_20d_pct"),
+        "atr14_pct": technicals.get("atr14_pct"),
+        "above_ma5": technicals.get("above_ma5"),
+        "above_ma20": technicals.get("above_ma20"),
+        "volume_pace_ratio": technicals.get("volume_pace_ratio"),
+    }
+
+
 def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[str, Any]:
     """Validate a supported entry setup and return a setup-specific scale."""
     status = str(regime.get("status", "unknown"))
@@ -308,7 +418,7 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
         and ret20 >= 3.0
         and -8.0 <= ret5 <= 6.0
         and above_ma20
-        and atr_pct <= 7.0
+        and atr_pct <= 10.0
     )
     if leader_pullback:
         return {"allowed": True, "setup": "leader_pullback", "setup_scale": 1.0, "reason": "중기 주도주가 20일선 위에서 건전한 눌림목 형성"}
@@ -362,7 +472,7 @@ def classify_entry(regime: dict[str, Any], technicals: dict[str, Any]) -> dict[s
         and ret5 >= -3.0
         and volume_pace >= 1.0
         and above_ma5
-        and atr_pct <= 9.0
+        and atr_pct <= 12.0
     )
     if relative_strength_recovery:
         return {
@@ -420,3 +530,36 @@ def calculate_position_size(
         "stop_distance_pct": round(stop_distance_pct, 2),
         "risk_budget": int(risk_budget),
     }
+
+
+def calculate_candidate_price_limit(
+    *,
+    cash: float,
+    total_eval: float,
+    holdings_eval: float,
+    regime_scale: float,
+    max_buy_amount: float,
+    risk_per_trade_pct: float = 1.5,
+    max_position_pct: float = 40.0,
+    hard_stop_pct: float = 7.0,
+) -> int:
+    """Return the highest price that can produce at least one approved share.
+
+    Candidate discovery does not know the final setup yet, so it assumes the
+    best setup scale (1.0) but a conservative 12% ATR. The order path still
+    recalculates exact sizing with the selected setup and live indicators.
+    """
+    sizing = calculate_position_size(
+        price=1.0,
+        cash=cash,
+        total_eval=total_eval,
+        holdings_eval=holdings_eval,
+        atr_pct=12.0,
+        regime_scale=regime_scale,
+        setup_scale=1.0,
+        max_buy_amount=max_buy_amount,
+        risk_per_trade_pct=risk_per_trade_pct,
+        max_position_pct=max_position_pct,
+        hard_stop_pct=hard_stop_pct,
+    )
+    return int(sizing.get("max_amount", 0) or 0)

@@ -73,8 +73,8 @@ def load_stopped_out_today() -> None:
 
 
 def _validate_ticker(ticker: str):
-    if not re.fullmatch(r"\d{6}", str(ticker)):
-        raise ValueError(f"유효하지 않은 종목코드: {ticker!r} (6자리 숫자여야 합니다)")
+    if not re.fullmatch(r"[0-9A-Z]{6}", str(ticker).upper()):
+        raise ValueError(f"유효하지 않은 종목코드: {ticker!r} (6자리 영숫자여야 합니다)")
 
 
 def _business_days_between(start_date: str, end_date) -> int:
@@ -172,9 +172,10 @@ GEMINI_TOOLS = Tool(
         FunctionDeclaration(
             name="get_top_volume_stocks",
             description=(
-                "현재 시장 거래량 상위 종목을 조회합니다. "
-                "반환된 목록에서 ETF/스팩/리츠 등을 제외한 후 후보 종목을 선정하세요. "
-                "n=50을 사용하여 충분한 후보군을 확보한 뒤 get_technical_indicators로 BB/RSI를 확인하세요."
+                "현재 시장 거래량 상위 종목에서 계좌 규모로 1주 이상 매수 가능하고, "
+                "일봉 25개 이상이며, 당일 +8% 이하인 후보를 코드가 사전 점수화합니다. "
+                "n=50으로 호출하면 최대 12개의 BB/RSI/주봉 및 entry_allowed 코드 판정까지 반환됩니다. "
+                "entry_allowed=true 후보를 우선하고 주문 직전에만 get_technical_indicators로 재확인하세요."
             ),
             parameters={
                 "type": "object",

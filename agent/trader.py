@@ -139,7 +139,7 @@ class TradingAgent:
             search_note = "Google Search grounding 사용" if slot_index == 0 else "검색 없이 실행"
             watchlist_note = ""
             scan_instruction = (
-                "7. 시장 레짐이 허용할 때만 get_top_volume_stocks(n=50) → 주도 업종/거래대금 후보 선별 → get_technical_indicators()로 과매도 반등형 또는 주도주 눌림목형 진입 여부를 결정하세요.\n"
+                "7. 시장 레짐이 허용할 때 get_top_volume_stocks(n=50)을 호출하세요. 코드가 계좌 규모·일봉 이력·기술 점수로 최대 12개 전부의 BB/RSI/주봉과 entry_allowed를 판정합니다. entry_allowed=true 후보가 있으면 주문 직전에 get_technical_indicators()로 재확인한 뒤 buy_stock을 호출하세요.\n"
             )
             if watchlist:
                 tickers = ", ".join(watchlist)

@@ -2,7 +2,7 @@
 
 This module keeps broker/API plumbing in ``agent.tools`` while replacing the
 market-regime, candidate ranking, technical enrichment, and buy validation
-paths with deterministic v11 rules.
+paths with deterministic v12 rules.
 """
 from __future__ import annotations
 
@@ -26,14 +26,18 @@ from data.trade_log import log_trade
 from data.utils import get_now_kst
 from strategy.rules import (
     augment_technicals,
+    calculate_candidate_price_limit,
     calculate_position_size,
     classify_entry,
     evaluate_market_regime,
+    pre_score_candidate,
 )
 
 logger = logging.getLogger(__name__)
 _BASE_TOOLS = None
 _BASE_EXECUTE_TOOL = None
+_DAILY_CANDLE_CACHE: dict[str, list[dict[str, Any]]] = {}
+_CANDIDATE_SCAN_COUNT = 12
 
 
 def install(base_tools) -> None:
@@ -66,11 +70,12 @@ def _enhanced_market_regime(broker, ticker: str = MARKET_PROXY_TICKER) -> dict[s
 
 
 def _enhanced_technicals(broker, ticker: str) -> dict[str, Any]:
-    technicals = broker.get_technical_indicators(ticker)
+    cached_candles = _DAILY_CANDLE_CACHE.get(ticker)
+    technicals = broker.get_technical_indicators(ticker, daily=cached_candles)
     if technicals.get("error"):
         return technicals
     try:
-        candles = broker.get_daily_candles(ticker, days=60)
+        candles = cached_candles or broker.get_daily_candles(ticker, days=60)
         current_price = float(technicals.get("current_price", 0) or 0)
         return augment_technicals(technicals, candles, current_price, now=get_now_kst())
     except Exception as exc:
@@ -79,20 +84,149 @@ def _enhanced_technicals(broker, ticker: str) -> dict[str, Any]:
 
 
 def _rank_liquid_leaders(broker, n: int) -> list[dict[str, Any]]:
+    _DAILY_CANDLE_CACHE.clear()
     raw = broker.get_top_volume_stocks(50)
-    ranked: list[dict[str, Any]] = []
+    base_tools = _tools()
+    regime = _enhanced_market_regime(broker)
+    if not regime.get("buy_allowed", False):
+        return []
+
+    if base_tools._is_dry_run() and base_tools._sim_portfolio is not None:
+        portfolio = base_tools._sim_portfolio
+    else:
+        portfolio = broker.get_balance()
+    affordable_price = calculate_candidate_price_limit(
+        cash=float(portfolio.get("cash", 0) or 0),
+        total_eval=float(portfolio.get("total_eval", 0) or 0),
+        holdings_eval=float(portfolio.get("holdings_eval", 0) or 0),
+        regime_scale=float(regime.get("recommended_buy_scale", 0) or 0),
+        max_buy_amount=MAX_BUY_AMOUNT,
+        risk_per_trade_pct=MAX_RISK_PER_TRADE_PCT,
+        max_position_pct=MAX_POSITION_PCT,
+        hard_stop_pct=STOP_LOSS_PCT,
+    )
+
+    liquid: list[dict[str, Any]] = []
     for item in raw:
+        ticker = str(item.get("ticker", ""))
         price = int(item.get("current_price", 0) or 0)
         volume = int(item.get("volume", 0) or 0)
-        if price < MIN_STOCK_PRICE:
+        change_rate = float(item.get("change_rate", 0) or 0)
+        if price < MIN_STOCK_PRICE or price > affordable_price or change_rate > 8.0:
+            continue
+        if ticker in base_tools._stopped_out_today:
+            continue
+        if base_tools._daily_buy_count.get(ticker, 0) >= MAX_DAILY_BUY_PER_TICKER:
             continue
         enriched = dict(item)
         enriched["estimated_trading_value"] = price * volume
-        ranked.append(enriched)
-    ranked.sort(key=lambda row: row.get("estimated_trading_value", 0), reverse=True)
-    for index, row in enumerate(ranked, start=1):
-        row["liquidity_rank"] = index
-    return ranked[:n]
+        liquid.append(enriched)
+    liquid.sort(key=lambda row: row.get("estimated_trading_value", 0), reverse=True)
+
+    ranked: list[dict[str, Any]] = []
+    total = max(1, len(liquid))
+    for liquidity_rank, item in enumerate(liquid, start=1):
+        ticker = str(item.get("ticker", ""))
+        try:
+            base_tools._validate_ticker(ticker)
+            candles = broker.get_daily_candles(ticker, days=60)
+            precheck = pre_score_candidate(item, candles, now=get_now_kst())
+        except Exception as exc:
+            logger.info("후보 사전검증 제외: %s (%s)", ticker, exc)
+            continue
+        if not precheck.get("eligible", False):
+            logger.info("후보 사전검증 제외: %s (%s)", ticker, precheck.get("reason"))
+            continue
+
+        _DAILY_CANDLE_CACHE[ticker] = candles
+        liquidity_score = max(0.0, 20.0 * (total - liquidity_rank + 1) / total)
+        row = {
+            **item,
+            **precheck,
+            "liquidity_rank": liquidity_rank,
+            "candidate_score": round(float(precheck.get("pre_score", 0)) + liquidity_score, 2),
+            "affordable_price_limit": affordable_price,
+            "analysis_required": True,
+        }
+        ranked.append(row)
+
+    ranked.sort(
+        key=lambda row: (row.get("candidate_score", 0), row.get("estimated_trading_value", 0)),
+        reverse=True,
+    )
+    scan_count = min(max(10, min(int(n), _CANDIDATE_SCAN_COUNT)), _CANDIDATE_SCAN_COUNT)
+    selected = ranked[:scan_count]
+    holdings = portfolio.get("holdings", []) or []
+    for rank, row in enumerate(selected, start=1):
+        row["candidate_rank"] = rank
+        try:
+            technicals = _enhanced_technicals(broker, str(row["ticker"]))
+        except Exception as exc:
+            technicals = {"error": f"기술적 지표 조회 실패: {exc}"}
+            logger.info("후보 기술지표 제외: %s (%s)", row["ticker"], exc)
+        if technicals.get("error"):
+            row["entry_allowed"] = False
+            row["entry"] = {
+                "allowed": False,
+                "setup": None,
+                "setup_scale": 0.0,
+                "reason": technicals["error"],
+            }
+            continue
+        entry = classify_entry(regime, technicals)
+        existing_holding = next(
+            (holding for holding in holdings if holding.get("ticker") == row.get("ticker")),
+            None,
+        )
+        existing_position_value = 0.0
+        if existing_holding:
+            existing_position_value = float(existing_holding.get("quantity", 0) or 0) * float(
+                existing_holding.get("current_price", row.get("current_price", 0)) or row.get("current_price", 0)
+            )
+        elif entry.get("allowed") and len(holdings) >= MAX_POSITIONS:
+            entry = {
+                **entry,
+                "allowed": False,
+                "setup_scale": 0.0,
+                "reason": f"최대 보유 종목 수 {MAX_POSITIONS}개 도달 — 신규 종목 진입 불가",
+            }
+        sizing = calculate_position_size(
+            price=float(row.get("current_price", 0) or 0),
+            cash=float(portfolio.get("cash", 0) or 0),
+            total_eval=float(portfolio.get("total_eval", 0) or 0),
+            holdings_eval=float(portfolio.get("holdings_eval", 0) or 0),
+            atr_pct=float(technicals.get("atr14_pct", 0) or 0),
+            regime_scale=float(regime.get("recommended_buy_scale", 0) or 0),
+            setup_scale=float(entry.get("setup_scale", 0) or 0),
+            max_buy_amount=MAX_BUY_AMOUNT,
+            existing_position_value=existing_position_value,
+            risk_per_trade_pct=MAX_RISK_PER_TRADE_PCT,
+            max_position_pct=MAX_POSITION_PCT,
+            hard_stop_pct=STOP_LOSS_PCT,
+        )
+        if entry.get("allowed") and int(sizing.get("quantity", 0) or 0) < 1:
+            entry = {
+                **entry,
+                "allowed": False,
+                "reason": (
+                    f"진입 조건은 충족했지만 매수 가능 수량 0주 — 현재가 "
+                    f"{int(row.get('current_price', 0) or 0):,}원, "
+                    f"최대 허용금액 {int(sizing.get('max_amount', 0) or 0):,}원"
+                ),
+            }
+        row["entry_allowed"] = bool(entry.get("allowed", False))
+        row["entry"] = entry
+        row["max_approved_quantity"] = int(sizing.get("quantity", 0) or 0)
+        row["max_approved_amount"] = int(sizing.get("max_amount", 0) or 0)
+        row["technicals"] = {
+            key: technicals.get(key)
+            for key in (
+                "bb_position", "rsi", "weekly_trend", "change_rate",
+                "return_5d_pct", "return_20d_pct", "breakout_pct",
+                "volume_pace_ratio", "atr14_pct", "above_ma5", "above_ma20",
+            )
+        }
+    return selected
 
 
 def _buy_stock(tool_input: dict[str, Any]) -> str:
@@ -274,7 +408,7 @@ def _buy_stock(tool_input: dict[str, Any]) -> str:
     if result.get("success"):
         base_tools._daily_buy_count[ticker] = buy_count + 1
         logger.info(
-            "전략 v11 매수 승인: %s %d주 setup=%s scale=%s",
+            "전략 v12 매수 승인: %s %d주 setup=%s scale=%s",
             ticker, approved_qty, entry.get("setup"), sizing.get("effective_scale"),
         )
     return json.dumps(result, ensure_ascii=False)
@@ -305,5 +439,5 @@ def execute_tool(tool_name: str, tool_input: dict[str, Any]) -> str:
             raise RuntimeError("기존 execute_tool이 설치되지 않았습니다")
         return _BASE_EXECUTE_TOOL(tool_name, tool_input)
     except Exception as exc:
-        logger.exception("전략 v11 tool 실행 실패: %s", tool_name)
+        logger.exception("전략 v12 tool 실행 실패: %s", tool_name)
         return json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)

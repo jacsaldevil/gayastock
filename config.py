@@ -41,7 +41,7 @@ MAX_HOLD_DAYS = int(os.getenv("MAX_HOLD_DAYS", "20"))  # 최대 보유 영업일
 MARKET_PROXY_TICKER = os.getenv("MARKET_PROXY_TICKER", "069500")
 MARKET_CRASH_PCT = float(os.getenv("MARKET_CRASH_PCT", "-5.0"))
 
-# 기존 도구 호환용 RSI 상한. v9 실제 진입 상한은 setup별 규칙에서 별도 검증.
+# 기존 도구 호환용 RSI 상한. v12 실제 진입 상한은 setup별 규칙에서 별도 검증.
 RSI_MAX_ENTRY = float(os.getenv("RSI_MAX_ENTRY", "72.0"))
 MAX_DAILY_BUY_PER_TICKER = int(os.getenv("MAX_DAILY_BUY_PER_TICKER", "1"))
 

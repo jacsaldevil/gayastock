@@ -3,9 +3,11 @@ from datetime import datetime
 
 from strategy.rules import (
     augment_technicals,
+    calculate_candidate_price_limit,
     calculate_position_size,
     classify_entry,
     evaluate_market_regime,
+    pre_score_candidate,
 )
 
 
@@ -238,6 +240,52 @@ class StrategyRulesTest(unittest.TestCase):
         self.assertTrue(entry["allowed"])
         self.assertEqual(entry["setup"], "relative_strength_recovery")
 
+    def test_relative_strength_recovery_allows_twelve_percent_atr(self):
+        regime = {
+            "status": "risk_off_selective",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.4,
+        }
+        tech = {
+            "bb_position": "middle",
+            "rsi": 55,
+            "weekly_trend": "sideways",
+            "change_rate": 1.2,
+            "return_5d_pct": -1.0,
+            "return_20d_pct": -4.0,
+            "breakout_pct": -7.0,
+            "volume_pace_ratio": 1.2,
+            "atr14_pct": 11.8,
+            "above_ma5": True,
+            "above_ma20": False,
+        }
+        entry = classify_entry(regime, tech)
+        self.assertTrue(entry["allowed"])
+        self.assertEqual(entry["setup"], "relative_strength_recovery")
+
+    def test_leader_pullback_allows_ten_percent_atr(self):
+        regime = {
+            "status": "risk_off_selective",
+            "buy_allowed": True,
+            "recommended_buy_scale": 0.4,
+        }
+        tech = {
+            "bb_position": "middle",
+            "rsi": 55,
+            "weekly_trend": "up",
+            "change_rate": 1.0,
+            "return_5d_pct": 3.0,
+            "return_20d_pct": 8.0,
+            "breakout_pct": -3.0,
+            "volume_pace_ratio": 1.0,
+            "atr14_pct": 9.8,
+            "above_ma5": True,
+            "above_ma20": True,
+        }
+        entry = classify_entry(regime, tech)
+        self.assertTrue(entry["allowed"])
+        self.assertEqual(entry["setup"], "leader_pullback")
+
     def test_crash_selective_scale_can_buy_one_moderate_price_share(self):
         sized = calculate_position_size(
             price=30_000,
@@ -332,6 +380,42 @@ class StrategyRulesTest(unittest.TestCase):
         )
         self.assertIn("atr14_pct", tech)
         self.assertGreater(tech["breakout_pct"], 0)
+
+    def test_candidate_precheck_rejects_short_daily_history(self):
+        rows = candles_from_closes([100 + i for i in range(20)])
+        result = pre_score_candidate(
+            {"ticker": "123456", "current_price": 120, "change_rate": 1.0},
+            rows,
+            now=datetime(2026, 7, 10, 15, 0),
+        )
+        self.assertFalse(result["eligible"])
+        self.assertIn("일봉 데이터 부족", result["reason"])
+
+    def test_candidate_precheck_scores_non_chasing_stock(self):
+        rows = candles_from_closes(
+            [100 + i * 0.3 for i in range(60)],
+            latest_change=2.0,
+            volumes=[100_000] * 59 + [200_000],
+        )
+        result = pre_score_candidate(
+            {"ticker": "123456", "current_price": 118, "change_rate": 2.0},
+            rows,
+            now=datetime(2026, 7, 10, 15, 0),
+        )
+        self.assertTrue(result["eligible"])
+        self.assertGreater(result["pre_score"], 0)
+        self.assertIn("atr14_pct", result)
+
+    def test_candidate_price_limit_excludes_zero_share_stocks(self):
+        limit = calculate_candidate_price_limit(
+            cash=283_606,
+            total_eval=283_606,
+            holdings_eval=0,
+            regime_scale=0.4,
+            max_buy_amount=500_000,
+        )
+        self.assertGreaterEqual(limit, 30_000)
+        self.assertLess(limit, 100_000)
 
 
 if __name__ == "__main__":

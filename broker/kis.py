@@ -479,9 +479,9 @@ class KISBroker:
             "rsi": round(rsi, 2),
         }
 
-    def get_technical_indicators(self, ticker: str) -> dict:
+    def get_technical_indicators(self, ticker: str, daily: list[dict] | None = None) -> dict:
         """BB(20일), RSI(14일), 주봉 추세 통합 반환 — 스윙 트레이딩 진입/청산 판단용"""
-        daily = self.get_daily_candles(ticker, days=60)
+        daily = daily if daily is not None else self.get_daily_candles(ticker, days=60)
         if len(daily) < 25:
             return {"ticker": ticker, "error": f"일봉 데이터 부족: {len(daily)}개"}
 
