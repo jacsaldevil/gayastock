@@ -1,4 +1,4 @@
-name: Deploy to Google Cloud Run
+name: Deploy Dashboard to Cloud Run
 
 on:
   push:
@@ -9,11 +9,10 @@ env:
   REGION: asia-northeast3
   REGISTRY: asia-northeast3-docker.pkg.dev
   DASHBOARD_SERVICE: gayastock-dashboard
-  AGENT_JOB: gayastock-agent
 
 jobs:
   deploy:
-    name: Build & Deploy
+    name: Build & Deploy Dashboard
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -21,15 +20,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Validate strategy runtime
-        run: |
-          python -m unittest discover -s tests -v
-          python -m py_compile strategy/*.py tests/*.py config.py main.py agent/trader.py data/trade_log.py
 
       - id: auth
         uses: google-github-actions/auth@v2
@@ -39,23 +29,23 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Grant Vertex AI permission to runner SA
+      - name: Delete Cloud Scheduler jobs (에이전트 트리거 제거)
+        continue-on-error: true
         run: |
-          SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
-          gcloud projects add-iam-policy-binding $PROJECT_ID \
-            --member="serviceAccount:$SA" \
-            --role="roles/aiplatform.user" --quiet 2>/dev/null || true
-
-      - name: Grant Secret Manager accessor
-        run: |
-          SA="serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
-          for SECRET in KIS_APP_KEY KIS_APP_SECRET KIS_ACCOUNT_NO; do
-            gcloud secrets add-iam-policy-binding $SECRET \
-              --member="$SA" --role="roles/secretmanager.secretAccessor" \
-              --project=$PROJECT_ID --quiet 2>/dev/null || true
+          for JOB in gayastock-agent-run01 gayastock-agent-run02 gayastock-agent-run03 \
+                     gayastock-agent-run04 gayastock-agent-run05 gayastock-agent-run06 \
+                     gayastock-agent-run07 gayastock-agent-run08 gayastock-agent-run09 \
+                     gayastock-agent-run10 gayastock-agent-run11 gayastock-agent-run12 \
+                     gayastock-agent-run13 gayastock-agent-run14; do
+            gcloud scheduler jobs delete "$JOB" --location $REGION --quiet 2>/dev/null || true
           done
 
-      - name: Ensure GCS data bucket
+      - name: Delete Cloud Run Job (에이전트 잡 제거)
+        continue-on-error: true
+        run: |
+          gcloud run jobs delete gayastock-agent --region $REGION --quiet 2>/dev/null || true
+
+      - name: Ensure GCS data bucket (로그 읽기용)
         continue-on-error: true
         env:
           GCS_SECRET_BUCKET: ${{ secrets.GCS_DATA_BUCKET }}
@@ -65,20 +55,8 @@ jobs:
           gsutil iam ch \
             "serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com:roles/storage.objectAdmin" \
             gs://$BUCKET 2>/dev/null || true
-          # logs/ 경로 공개 읽기 허용 (Claude 직접 접근용)
           gsutil iam ch allUsers:objectViewer gs://$BUCKET 2>/dev/null || true
           echo "GCS_DATA_BUCKET=$BUCKET" >> $GITHUB_ENV
-
-      - name: Ensure GCS token bucket (비공개)
-        continue-on-error: true
-        run: |
-          # 토큰 전용 버킷 — 공개 접근 없음, runner SA만 접근 가능
-          TOKEN_BUCKET="${PROJECT_ID}-gayastock-token"
-          gsutil mb -l $REGION -p $PROJECT_ID gs://$TOKEN_BUCKET 2>/dev/null || true
-          gsutil iam ch \
-            "serviceAccount:gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com:roles/storage.objectAdmin" \
-            gs://$TOKEN_BUCKET 2>/dev/null || true
-          echo "GCS_TOKEN_BUCKET=$TOKEN_BUCKET" >> $GITHUB_ENV
 
       - name: Configure Docker
         run: gcloud auth configure-docker $REGISTRY --quiet
@@ -90,18 +68,14 @@ jobs:
           docker push $IMAGE:$GITHUB_SHA
           docker push $IMAGE:latest
 
-      - name: Build & Push Agent image
-        run: |
-          AGENT_IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
-          docker build -f Dockerfile.agent -t $AGENT_IMAGE:$GITHUB_SHA -t $AGENT_IMAGE:latest .
-          docker push $AGENT_IMAGE:$GITHUB_SHA
-          docker push $AGENT_IMAGE:latest
-
       - name: Deploy Dashboard to Cloud Run
+        env:
+          KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+          KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+          KIS_ACCOUNT_NO: ${{ secrets.KIS_ACCOUNT_NO }}
+          INITIAL_CAPITAL: ${{ secrets.INITIAL_CAPITAL }}
         run: |
           IMAGE="$REGISTRY/$PROJECT_ID/gayastock/app"
-          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,INITIAL_CAPITAL=${{ secrets.INITIAL_CAPITAL }}"
-          SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
           gcloud run deploy $DASHBOARD_SERVICE \
             --image $IMAGE:$GITHUB_SHA --region $REGION \
             --platform managed --allow-unauthenticated \
@@ -110,60 +84,6 @@ jobs:
             --min-instances 0 \
             --max-instances 2 \
             --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com \
-            --set-env-vars "$ENV_FLAGS" --set-secrets "$SECRETS_FLAGS" --quiet
-
-      - name: Update Cloud Run Job (Agent)
-        run: |
-          IMAGE="$REGISTRY/$PROJECT_ID/gayastock/agent"
-          ENV_FLAGS="GCP_PROJECT_ID=$PROJECT_ID,GCP_REGION=$REGION,KIS_MOCK=false,DRY_RUN=false,GCS_DATA_BUCKET=$GCS_DATA_BUCKET,GCS_TOKEN_BUCKET=$GCS_TOKEN_BUCKET,LOG_DIR=/tmp/logs,INNER_LOOP_COUNT=1,INNER_LOOP_SLEEP_SEC=90"
-          SECRETS_FLAGS="KIS_APP_KEY=KIS_APP_KEY:latest,KIS_APP_SECRET=KIS_APP_SECRET:latest,KIS_ACCOUNT_NO=KIS_ACCOUNT_NO:latest"
-          COMMON_FLAGS="--image $IMAGE:$GITHUB_SHA --region $REGION --memory 512Mi --cpu 1 --task-timeout 600 --service-account gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com --set-env-vars $ENV_FLAGS --set-secrets $SECRETS_FLAGS"
-          if gcloud run jobs describe $AGENT_JOB --region $REGION --quiet 2>/dev/null; then
-            gcloud run jobs update $AGENT_JOB $COMMON_FLAGS
-          else
-            gcloud run jobs create $AGENT_JOB $COMMON_FLAGS
-          fi
-
-      - name: Remove old Cloud Scheduler jobs (20회 → 14회 전환)
-        continue-on-error: true
-        run: |
-          for OLD in "${AGENT_JOB}-morning" "${AGENT_JOB}-midday" "${AGENT_JOB}-afternoon" \
-                     "${AGENT_JOB}-run1" "${AGENT_JOB}-run2" "${AGENT_JOB}-run3" \
-                     "${AGENT_JOB}-run4" "${AGENT_JOB}-run5" \
-                     "${AGENT_JOB}-run15" "${AGENT_JOB}-run16" "${AGENT_JOB}-run17" \
-                     "${AGENT_JOB}-run18" "${AGENT_JOB}-run19" "${AGENT_JOB}-run20"; do
-            gcloud scheduler jobs delete "$OLD" --location $REGION --quiet 2>/dev/null || true
-          done
-
-      - name: Ensure Cloud Scheduler jobs (14회/일, 30분 간격 09:00~15:30)
-        continue-on-error: true
-        run: |
-          SA="gayastock-runner@$PROJECT_ID.iam.gserviceaccount.com"
-          URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT_ID}/jobs/${AGENT_JOB}:run"
-          FLAGS="--location $REGION --time-zone Asia/Seoul --uri $URI --http-method POST --oauth-service-account-email $SA --quiet"
-
-          declare -A SCHEDULES=(
-            ["${AGENT_JOB}-run01"]="0  9  * * 1-5"
-            ["${AGENT_JOB}-run02"]="30 9  * * 1-5"
-            ["${AGENT_JOB}-run03"]="0  10 * * 1-5"
-            ["${AGENT_JOB}-run04"]="30 10 * * 1-5"
-            ["${AGENT_JOB}-run05"]="0  11 * * 1-5"
-            ["${AGENT_JOB}-run06"]="30 11 * * 1-5"
-            ["${AGENT_JOB}-run07"]="0  12 * * 1-5"
-            ["${AGENT_JOB}-run08"]="30 12 * * 1-5"
-            ["${AGENT_JOB}-run09"]="0  13 * * 1-5"
-            ["${AGENT_JOB}-run10"]="30 13 * * 1-5"
-            ["${AGENT_JOB}-run11"]="0  14 * * 1-5"
-            ["${AGENT_JOB}-run12"]="30 14 * * 1-5"
-            ["${AGENT_JOB}-run13"]="0  15 * * 1-5"
-            ["${AGENT_JOB}-run14"]="30 15 * * 1-5"
-          )
-
-          for JOB_NAME in "${!SCHEDULES[@]}"; do
-            CRON="${SCHEDULES[$JOB_NAME]}"
-            if gcloud scheduler jobs describe "$JOB_NAME" --location $REGION --quiet 2>/dev/null; then
-              gcloud scheduler jobs update http "$JOB_NAME" $FLAGS --schedule "$CRON"
-            else
-              gcloud scheduler jobs create http "$JOB_NAME" $FLAGS --schedule "$CRON"
-            fi
-          done
+            --set-env-vars "^||^GCP_PROJECT_ID=$PROJECT_ID||GCP_REGION=$REGION||KIS_MOCK=false||DRY_RUN=false||GCS_DATA_BUCKET=$GCS_DATA_BUCKET||INITIAL_CAPITAL=${INITIAL_CAPITAL}||KIS_APP_KEY=${KIS_APP_KEY}||KIS_APP_SECRET=${KIS_APP_SECRET}||KIS_ACCOUNT_NO=${KIS_ACCOUNT_NO}" \
+            --clear-secrets \
+            --quiet
