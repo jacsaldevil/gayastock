@@ -58,6 +58,22 @@ jobs:
           gsutil iam ch allUsers:objectViewer gs://$BUCKET 2>/dev/null || true
           echo "GCS_DATA_BUCKET=$BUCKET" >> $GITHUB_ENV
 
+      - name: Purge Artifact Registry (agent 이미지 삭제 + app 구버전 정리)
+        continue-on-error: true
+        run: |
+          # agent 이미지 전체 삭제
+          gcloud artifacts docker images delete \
+            "$REGISTRY/$PROJECT_ID/gayastock/agent" \
+            --delete-tags --quiet 2>/dev/null || true
+          # app 이미지 최신 3개만 남기고 삭제
+          gcloud artifacts docker images list \
+            "$REGISTRY/$PROJECT_ID/gayastock/app" \
+            --sort-by="~UPDATE_TIME" --format="value(VERSION)" \
+            | tail -n +4 \
+            | xargs -I{} gcloud artifacts docker images delete \
+                "$REGISTRY/$PROJECT_ID/gayastock/app@{}" \
+                --quiet 2>/dev/null || true
+
       - name: Configure Docker
         run: gcloud auth configure-docker $REGISTRY --quiet
 
